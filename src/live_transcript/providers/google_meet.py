@@ -396,7 +396,8 @@ def run(argv=None):
                         # connection: other participants may simply be muted.
                         next_stats = now + 15
                     pg.wait_for_timeout(500)
-            except AdmissionRefused:
+            except AdmissionRefused as refusal:
+                print(f"ADMISSION_REFUSED {refusal}", flush=True)
                 if ctx and ctx.pages:
                     optional_feature(lambda: ctx.pages[-1].screenshot(path=str(out.with_suffix('.denied.png'))), 'admission screenshot')
                 raise SystemExit(4)  # a host rejection is terminal, never an auto-rejoin loop
