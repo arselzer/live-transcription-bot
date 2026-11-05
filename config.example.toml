@@ -1,0 +1,89 @@
+# Copy to ~/.config/live-transcript/config.toml or use --config FILE.
+# Paths below are examples. Model files/voices and a prepared VM are prerequisites.
+[paths]
+root = "~/live-transcription-bot"
+state = "~/.local/state/live-transcript"
+logs = "~/.local/state/live-transcript/logs"
+recordings = "~/.local/share/live-transcript/recordings"
+safety_copies = "~/.local/share/live-transcript/safety-copies"
+# Other runtime paths derive from root unless explicitly set.
+# recordings = "/srv/live-transcript/recordings"
+# archive_destination = "/mnt/archive/live-transcript"
+# archive_mount = "/mnt/archive"
+# safety_copies = "/srv/live-transcript/safety-copies"
+# vault = "~/notes"
+# whisper_cli = "~/whisper.cpp/build/bin/whisper-cli"
+# glossary = "/path/to/private/glossary.txt"
+# diarization_model = "/path/to/local/ecapa"
+# postprocess_python = "/usr/bin/python3"
+
+[vm]
+ssh = "transcript@192.0.2.20"
+ip = "192.0.2.20"
+name = "transcript"
+home = "/home/transcript"
+manage_libvirt = false
+
+[caption]
+host = "192.0.2.1" # Host IP reachable from the VM; bind only on a trusted interface.
+bind = "192.0.2.1"
+port = 8099
+stt_url = "http://127.0.0.1:9091/inference"
+silence_rms = 40.0
+run_every = 1.5
+silence_finalize = 3.5
+commit_once = true
+
+[model]
+url = "http://127.0.0.1:8078/v1/chat/completions"
+name = "local-model"
+
+[postprocess]
+# Keep full-model recognition bounded; retry suspect chunks independently.
+chunk_seconds = 300
+retry_chunk_seconds = 30
+timeout_seconds = 1200
+diarization_enabled = false
+
+[recovery]
+enabled = true
+model_enabled = true
+check_seconds = 3.0
+cooldown_seconds = 25.0
+missing_seconds = 12.0
+max_actions_5min = 6
+
+[storage]
+safety_max_bytes = 8589934592
+host_free_reserve_bytes = 17179869184
+
+[calendar]
+timezone = "UTC"
+url_file = "~/.config/meetbot/calendar_url"
+
+[asr]
+cpu_fallback = true
+adaptive_model = true
+cpu_url = "http://127.0.0.1:9092/inference"
+small_cpu_url = "http://127.0.0.1:9093/inference"
+gpu_timeout = 12.0
+cpu_timeout = 120.0
+gpu_retry_seconds = 30.0
+backlog_seconds = 20.0
+slow_rtf = 1.2
+slow_samples = 2
+cpu_threads = 16
+gpu_device = "0"
+# rocm-smi card numbering can differ from HIP_VISIBLE_DEVICES numbering.
+metrics_device = "card0"
+
+[identity]
+name = "Live Transcript · Recording"
+
+[admission]
+# Test helpers only; the production meeting owner has its own bounded recovery.
+test_min_interval_seconds = 180.0
+test_window_seconds = 600.0
+test_max_attempts = 6
+zoom_name_fallbacks = []
+name_retry_delay_seconds = 5.0

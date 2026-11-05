@@ -1,0 +1,13 @@
+[Unit]
+Description=Live Transcript ASR gpu
+After=network.target
+StartLimitIntervalSec=0
+[Service]
+WorkingDirectory=%h/live-transcription-bot
+ExecStart=/usr/bin/python3 %h/live-transcription-bot/asr_service.py --device gpu
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+UMask=0077
+[Install]
+WantedBy=default.target
