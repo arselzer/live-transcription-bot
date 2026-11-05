@@ -45,6 +45,7 @@ docs/testing.md
 docs/zoom-admission.md
 finish_meeting.py
 join_meeting.py
+google_meet.py
 join_meeting_vm.py
 join_now.sh
 join_proton_now.sh
@@ -110,6 +111,7 @@ src/live_transcript/presentation/render.py
 src/live_transcript/presentation/subscribe.py
 src/live_transcript/providers/__init__.py
 src/live_transcript/providers/admission.py
+src/live_transcript/providers/google_meet.py
 src/live_transcript/providers/proton.py
 src/live_transcript/providers/rescue.py
 src/live_transcript/providers/video.py
@@ -164,6 +166,7 @@ tests/test_meeting_board.py
 tests/test_meeting_session.py
 tests/test_name_fallbacks.py
 tests/test_package_layout.py
+tests/test_google_meet.py
 tests/test_proton_meet.py
 tests/test_readiness.py
 tests/test_recording_guard.py

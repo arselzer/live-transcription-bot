@@ -108,6 +108,10 @@ def main(name_retry_allowed=False, absolute_deadline=None):
 
     if len(sys.argv) > 1 and is_proton_url(sys.argv[1]):
         return run_proton(sys.argv[1:])
+    from live_transcript.providers.google_meet import is_google_url, run as run_google
+
+    if len(sys.argv) > 1 and is_google_url(sys.argv[1]):
+        return run_google(sys.argv[1:])
     ap = argparse.ArgumentParser()
     ap.add_argument("meeting")
     ap.add_argument("--name", default=get("identity", "name"))
@@ -1199,9 +1203,10 @@ def run_with_name_fallbacks():
     from live_transcript.providers.admission import AdmissionFailure
     from live_transcript.core.options import rejoin_options
     from live_transcript.providers.proton import is_proton_url
+    from live_transcript.providers.google_meet import is_google_url
 
     original = list(sys.argv)
-    if len(original) < 2 or "--dry" in original or is_proton_url(original[1]):
+    if len(original) < 2 or "--dry" in original or is_proton_url(original[1]) or is_google_url(original[1]):
         return main()
     options, minutes = rejoin_options(original[2:])
     first = options.get("--name", get("identity", "name"))
