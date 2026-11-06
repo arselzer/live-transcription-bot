@@ -5,7 +5,7 @@ loopback. The process group belongs to this context and is always reaped. It
 never attaches to or terminates a pre-existing browser.
 """
 
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 import os
 from pathlib import Path
 import signal
@@ -17,6 +17,19 @@ import urllib.request
 from live_transcript.core.config import get
 
 
+def google_profile_ready(context):
+    """A readiness hint, followed by the join flow's signed-out UI guard.
+
+    Cookie values are checked for presence in memory, never persisted or logged.
+    Expired sessions are still rejected when Google renders a guest/sign-in UI.
+    """
+    names = {"SID", "__Secure-1PSID", "__Secure-3PSID"}
+    return any(
+        cookie.get("name") in names and bool(cookie.get("value"))
+        for cookie in context.cookies("https://accounts.google.com")
+    )
+
+
 @contextmanager
 def google_context(playwright, profile, *, env, args, port=9222):
     if type(port) is not int or not 1 <= port <= 65535:
@@ -26,20 +39,25 @@ def google_context(playwright, profile, *, env, args, port=9222):
     args += [f"--remote-debugging-port={port}", "--remote-debugging-address=127.0.0.1"]
     executable = get("browser", "google_executable") or playwright.chromium.executable_path
     if get("browser", "google_mode") == "playwright":
-        context = playwright.chromium.launch_persistent_context(
-            str(profile),
+        launch_options = dict(
             executable_path=executable,
             headless=False,
             env=env,
             ignore_default_args=["--mute-audio"],
-            locale="en-US",
             args=args,
-            viewport={"width": 1280, "height": 800},
         )
-        try:
+        with ExitStack() as cleanup:
+            context_options = dict(locale="en-US", viewport={"width": 1280, "height": 800})
+            if get("browser", "google_private"):
+                browser = playwright.chromium.launch(**launch_options)
+                cleanup.callback(browser.close)
+                context = browser.new_context(**context_options)
+            else:
+                context = playwright.chromium.launch_persistent_context(
+                    str(profile), **launch_options, **context_options
+                )
+            cleanup.callback(context.close)
             yield context
-        finally:
-            context.close()
         return
 
     # A listening endpoint could belong to an unrelated browser. Fail closed.

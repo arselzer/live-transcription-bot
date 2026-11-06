@@ -26,6 +26,7 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | `calendar` | Optional private ICS URL file and timezone |
 | `audio` | Dedicated PulseAudio sink name; capture reads its monitor |
 | `browser` | Google launch mode, private context, optional guest Chrome executable |
+| `google` | Native/DOM join input and bounded admission timeout |
 
 The launcher exports only guest-relevant settings to the guest's default config
 location. Host paths, vault and calendar settings are excluded. The launcher deploys the

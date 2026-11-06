@@ -52,6 +52,7 @@ DEFAULTS = {
         "manage_libvirt": True,
     },
     "audio": {"sink": "transcript"},
+    "google": {"input_mode": "native", "admission_timeout": 330.0},
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
     "caption": {
         "host": "127.0.0.1",
@@ -168,6 +169,10 @@ def load(path=None):
         raise ValueError("invalid calendar.timezone") from exc
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", config["audio"]["sink"]):
         raise ValueError("audio.sink must be a simple PulseAudio sink name")
+    if config["google"]["input_mode"] not in ("native", "dom"):
+        raise ValueError("google.input_mode must be native or dom")
+    if not 1 <= config["google"]["admission_timeout"] <= 600:
+        raise ValueError("google.admission_timeout must be between 1 and 600 seconds")
     if config["browser"]["google_mode"] not in ("cdp", "playwright"):
         raise ValueError("browser.google_mode must be cdp or playwright")
     executable = config["browser"]["google_executable"]
@@ -266,6 +271,7 @@ def write_vm_config(destination):
         "caption": CONFIG["caption"],
         "audio": CONFIG["audio"],
         "browser": CONFIG["browser"],
+        "google": CONFIG["google"],
         "recovery": CONFIG["recovery"],
         "admission": CONFIG["admission"],
         "identity": CONFIG["identity"],

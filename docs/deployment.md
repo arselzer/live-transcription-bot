@@ -116,12 +116,38 @@ It uses Playwright's installed Chromium binary; `browser.google_executable` can
 select an absolute path to another installed Chrome binary in the VM. The
 recorder keeps its explicit recording display name. No CAPTCHA is solved.
 
+Joining uses verified native X11 input by default. Install `xdotool` and `xclip`
+in the guest (on Debian/Ubuntu: `sudo apt-get install xdotool xclip`). Input is
+restricted to the Meet page in the owned virtual display. Each target is checked
+under the actual pointer before clicking; the entered name is verified exactly,
+including Unicode. A failed verification stops the join and retains diagnostics.
+`google.input_mode="dom"` selects ordinary Playwright input for diagnosis.
+`google.admission_timeout` defaults to 330 seconds and never extends the original
+meeting deadline. `doctor` reports missing native-input dependencies.
+
 Set `browser.google_private=false` to use the dedicated persistent
 `chrome-meet-prof` profile, for example when an approved signed-in identity is
-required. Provision sign-in separately. `google_mode="playwright"` retains the
+required. Use a dedicated, transparently named bot account. Provision sign-in
+separately in that profile; the app does not accept passwords or solve sign-in
+challenges. It checks for an existing Google session before navigating to the
+meeting and stops if Google subsequently renders a signed-out name form. It never
+silently falls back to anonymous joining. A session cookie is a readiness hint,
+not a guarantee that the account still has access.
+
+`google_mode="playwright"` retains the
 ordinary Playwright launch path for diagnosis; Google can reject that launch
 before the prejoin screen, even in an open room. Successful prejoin is not proof
-of admission: the bot starts evidence capture only after in-call controls appear.
+of admission: recording requires both a leave control and an in-call control
+such as Present now, with no waiting-room or pending participation notice.
+Known Join now acknowledgements for existing recording/notetaker notices are
+scoped to those dialogs. Starting a new recording/AI feature, switching an account
+out of another call, and unfamiliar consent prompts require an operator.
+
+Admission transitions, screenshots and the method/status of a refused Google RPC
+are saved privately under `SESSION.admission/` and copied into the archive on
+success. Cookies, request payloads and invitation queries are excluded from this
+diagnostic record. HTTP 403 does not establish that the host denied the request
+or that bot detection was its cause; these are distinct states.
 
 [Google's access documentation](https://support.google.com/meet/answer/9302870?hl=en)
 explains that Open, Trusted, Restricted and host-presence controls affect entry;

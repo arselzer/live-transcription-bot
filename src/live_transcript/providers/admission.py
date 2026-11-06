@@ -11,6 +11,12 @@ from live_transcript.capture.guard import atomic_json
 from live_transcript.core.config import get
 
 REASONS = {
+    "google_navigation_unexpected": re.compile(r"Google navigated outside Meet", re.I),
+    "google_join_refused": re.compile(r"Google join RPC refused", re.I),
+    "google_input_unavailable": re.compile(r"Google native input unavailable", re.I),
+    "google_auth_session_missing": re.compile(r"Google profile signed out", re.I),
+    "google_consent_required": re.compile(r"Google consent requires operator", re.I),
+    "google_account_in_use": re.compile(r"Google account in another call", re.I),
     "google_access_denied": re.compile(
         r"you (?:can.t|cannot) join this (?:video call|meeting)", re.I
     ),
@@ -71,7 +77,9 @@ def save_failure(page, directory, reason, display_name, provider="zoom", automat
         display_name=display_name,
         origin=parsed.hostname,
         automatic_retry=bool(automatic_retry),
-        cause="not established" if reason == "zoom_automation_blocked" else reason,
+        cause="not established"
+        if reason in ("zoom_automation_blocked", "google_access_denied", "google_join_refused")
+        else reason,
     )
     # A scoped image survives future launches clearing legacy stage screenshots.
     try:

@@ -42,7 +42,9 @@ src/live_transcript/presentation/render.py
 src/live_transcript/providers/__init__.py
 src/live_transcript/providers/admission.py
 src/live_transcript/providers/browser.py
+src/live_transcript/providers/google_admission.py
 src/live_transcript/providers/google_meet.py
+src/live_transcript/providers/interaction.py
 src/live_transcript/providers/proton.py
 src/live_transcript/providers/rescue.py
 src/live_transcript/providers/video.py

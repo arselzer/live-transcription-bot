@@ -150,9 +150,22 @@ def main():
             context.add_init_script(PEERS_JS)
             pg = context.new_page()
             from live_transcript.providers.zoom import meeting_url, joined_controls
+            from live_transcript.providers.google_admission import navigation_url, watch_refusals
 
+            if google:
+                from live_transcript.providers.browser import google_profile_ready
+
+                if not get("browser", "google_private") and not google_profile_ready(context):
+                    raise google_meet.AdmissionRefused(
+                        "Dedicated Google profile is not signed in", "google_auth_session_missing"
+                    )
+                watch_refusals(pg)
             pg.goto(
-                a.meeting if proton or google else meeting_url(a.meeting),
+                a.meeting
+                if proton
+                else navigation_url(a.meeting)
+                if google
+                else meeting_url(a.meeting),
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
@@ -161,7 +174,16 @@ def main():
                 click_if_visible(pg, "Turn off camera")
                 click_if_visible(pg, "Unmute microphone")
             elif google:
-                google_meet.prejoin(pg, a.name, timeout=180)
+                from live_transcript.providers.interaction import NativeInput
+
+                interaction = NativeInput(pg) if get("google", "input_mode") == "native" else None
+                google_meet.prejoin(
+                    pg,
+                    a.name,
+                    timeout=min(180, get("google", "admission_timeout")),
+                    interaction=interaction,
+                    require_sign_in=not get("browser", "google_private"),
+                )
                 google_meet.click_if_visible(pg, "Turn off camera")
                 google_meet.click_if_visible(pg, "Turn on microphone")
             else:

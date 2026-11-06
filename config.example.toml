@@ -28,6 +28,11 @@ manage_libvirt = false
 [audio]
 sink = "transcript"
 
+[google]
+# Native X11 input requires xdotool+xclip in the dedicated browser VM.
+input_mode = "native"
+admission_timeout = 330.0
+
 [browser]
 google_mode = "cdp"
 google_private = true

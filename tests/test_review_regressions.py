@@ -353,6 +353,40 @@ class PrivacyBoundaryTests(unittest.TestCase):
                 )
                 self.assertEqual(source.extractfile(entry).read(), b"data")
 
+    def test_wheel_build_uses_only_reviewed_sources_despite_stale_build_output(self):
+        import build_backend
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            package = root / "src/live_transcript"
+            package.mkdir(parents=True)
+            (package / "__init__.py").write_text("VALUE=1\n")
+            (root / "PUBLIC_SOURCE_FILES.txt").write_text(
+                "PUBLIC_SOURCE_FILES.txt\nsrc/live_transcript/__init__.py\n"
+            )
+            stale = root / "build/lib/live_transcript/retired.py"
+            stale.parent.mkdir(parents=True)
+            stale.write_text("retired helper\n")
+            previous = Path.cwd()
+
+            def build(operation, output, settings, metadata):
+                self.assertEqual(operation, "build_wheel")
+                self.assertNotEqual(Path.cwd(), root)
+                self.assertEqual(
+                    (Path.cwd() / "src/live_transcript/__init__.py").read_text(), "VALUE=1\n"
+                )
+                self.assertFalse((Path.cwd() / "build/lib/live_transcript/retired.py").exists())
+                self.assertTrue(Path(output).is_absolute())
+                return "fixture.whl"
+
+            with (
+                patch.object(build_backend, "_validated_root", return_value=root),
+                patch.object(build_backend, "_delegate", side_effect=build),
+            ):
+                self.assertEqual(build_backend.build_wheel(root / "dist"), "fixture.whl")
+            self.assertEqual(Path.cwd(), previous)
+            self.assertTrue(stale.exists())
+
     def test_sdist_metadata_exemption_rejects_arbitrary_setup_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

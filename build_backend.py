@@ -5,7 +5,7 @@ import os
 from tools.check_public_source import audit, load_policy
 
 
-def _delegate(operation, *arguments):
+def _validated_root():
     root = Path(__file__).resolve().parent
     report = audit(
         root,
@@ -16,6 +16,11 @@ def _delegate(operation, *arguments):
         raise RuntimeError(
             "Source privacy/allowlist check failed; run tools/check_public_source.py locally"
         )
+    return root
+
+
+def _delegate(operation, *arguments):
+    _validated_root()
     from setuptools import build_meta
 
     return getattr(build_meta, operation)(*arguments)
@@ -42,7 +47,29 @@ def prepare_metadata_for_build_editable(metadata_directory, config_settings=None
 
 
 def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):
-    return _delegate("build_wheel", wheel_directory, config_settings, metadata_directory)
+    import tempfile
+    from live_transcript.core.source_files import approved_paths, read_source
+
+    root = _validated_root()
+    output = str(Path(wheel_directory).absolute())
+    metadata = str(Path(metadata_directory).absolute()) if metadata_directory else None
+    # Setuptools can retain deleted modules in build/lib across incremental
+    # builds. Stage only reviewed bytes; never ship a previous build's files.
+    with tempfile.TemporaryDirectory(prefix="reviewed-wheel-") as directory:
+        staging = Path(directory)
+        for name in approved_paths(root):
+            destination = staging / name
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(read_source(root, name))
+        report = audit(staging, load_policy(os.environ.get("LIVE_TRANSCRIPT_PRIVATE_POLICY")))
+        if not report["ok"]:
+            raise RuntimeError("Staged wheel source privacy check failed")
+        previous = Path.cwd()
+        try:
+            os.chdir(staging)
+            return _delegate("build_wheel", output, config_settings, metadata)
+        finally:
+            os.chdir(previous)
 
 
 def build_editable(wheel_directory, config_settings=None, metadata_directory=None):

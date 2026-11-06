@@ -158,7 +158,8 @@ def doctor():
             "import importlib.util,json,pathlib,shutil; print(json.dumps(dict("
             "playwright=importlib.util.find_spec('playwright') is not None,"
             "xvfb=shutil.which('xvfb-run') is not None,ffmpeg=shutil.which('ffmpeg') is not None,"
-            "camera=pathlib.Path('/dev/video0').exists(),free=shutil.disk_usage('.').free)))"
+            "camera=pathlib.Path('/dev/video0').exists(),native_input=shutil.which('xdotool') is not None and shutil.which('xclip') is not None,"
+            "free=shutil.disk_usage('.').free)))"
         )
         try:
             result = subprocess.run(
@@ -181,6 +182,14 @@ def doctor():
                 and data["free"] > 1024**3
             )
             add("VM runtime", "pass" if good else "fail", json.dumps(data))
+            if get("google", "input_mode") == "native":
+                add(
+                    "Google native input",
+                    "pass" if data.get("native_input") else "warn",
+                    "xdotool and xclip available"
+                    if data.get("native_input")
+                    else "install xdotool and xclip in the VM for Google joins",
+                )
         except Exception as exc:
             add("VM runtime", "fail", type(exc).__name__ + "; capture readiness unverified")
     add(

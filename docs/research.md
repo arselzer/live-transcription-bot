@@ -85,3 +85,59 @@ remained healthy and both finalized archive/safety-copy inventories verified.
 Current Zoom bot-protection and SDK guidance are covered separately in
 [Zoom admission](zoom-admission.md). RTMS is the documented AI-notetaker input
 path; older Meeting SDK bot examples should not be treated as current policy.
+
+
+## Google Meet integration decision (2026-11-06)
+
+The current capture, recognition, presentation and recovery pipeline remains the
+owner of raw evidence. Google Meet is implemented through the same provider
+boundary as the other browser adapters. A separate hosted recorder is not a
+requirement for joining or preserving media.
+
+Sources inspected:
+
+- [Vexa](https://github.com/Vexa-ai/vexa), Apache-2.0; reviewed join/admission,
+  remote-browser session handling and chunked recording at revision
+  `6b26f7b921756d6db128d42cd70b4b7046381407`. Its join module separates lobby,
+  admission and refusal detection, uses verified X11 input, and supports durable
+  signed-in browser profiles. Its recording pipeline uploads chunks independently
+  of final assembly. These are useful design references.
+- [Attendee](https://github.com/attendee-labs/attendee) and its
+  [signed-in bot guide](https://docs.attendee.dev/guides/signedinbots). It supports
+  Google Workspace/SAML account provisioning as well as browser joining and
+  audio/video IO. Its code is under Elastic License 2.0; no implementation or
+  recorded input assets were copied into this project. An eventual integration
+  with a separately operated service would have an API boundary.
+- [OpenMeetRec](https://github.com/vlebert/openmeetrec), MIT: a useful local,
+  user-initiated tab/microphone recorder, but not an autonomous meeting joiner or
+  replacement for the independent video/snapshot archive.
+- Google's [Meet Media API deprecation](https://developers.google.com/workspace/meet/release-notes):
+  announced October 28, 2026, with shutdown January 15, 2027. This live-media API
+  is not a suitable new dependency. Native Meet recordings and the supported
+  REST artifact API remain possible additional evidence sources on eligible
+  accounts.
+
+Implementation choices: independently written X11 input with target and focus
+verification, exact name verification, bounded native command timeouts, scoped
+Google RPC refusal observations, explicit waiting/notice/authentication states,
+and fail-closed signed-in mode. Recording requires positive in-call evidence;
+a lobby leave button or a live self-preview is insufficient. Unknown prompts and
+CAPTCHA require an operator. The current implementation does not reproduce
+upstream fingerprint spoofing, recorded mouse trajectories, or multi-attempt
+cookie/profile cycling.
+
+The native-input drill also measures event trust directly. Treat an upstream
+comment about all Playwright/CDP clicks having `isTrusted=false` as an unverified
+claim: browser input APIs and JavaScript `element.click()` are different. Native
+input alone is not proof that Google will admit a bot. Validate against a real,
+currently active authorized room, then verify original audio and final checksums
+independently of the recognizer.
+
+Validation status on November 6: the controlled Google fixture passes native
+input with Trusted Types enabled, exact Unicode name entry, microphone control,
+speaker evidence and capture/supervisor crash recovery. Real unsigned guest
+admission remains unverified: the latest live test reached Join now and received
+HTTP 403 from CreateMeetingDevice before entering the call. This does not establish
+the cause of refusal, and fixture results must not be described as a successful
+live Google Meet recording. No account login is required by the adapter's default
+guest mode; signed-in profiles are a separate, explicit configuration choice.

@@ -125,20 +125,64 @@ def main():
                 page.context.grant_permissions(["microphone"], origin="https://app.zoom.us")
             if args.provider == "google":
                 body = """<h1>Isolated Google Meet fixture</h1>
+                <div id="lobby"><input aria-label="Your name" maxlength="60">
+                <button onclick="window.fixtureNativeJoin=event.isTrusted;document.querySelector('#lobby').hidden=true;
+                    document.querySelector('#call').hidden=false">Join now</button>
+                <button id="probe" onclick="window.fixtureDomClick=event.isTrusted">Input check</button></div>
+                <div id="call" hidden><button>Present now</button>
                 <div jsname="fixture" aria-label="Fixture Alice is speaking"><span>Fixture Alice</span></div>
                 <button aria-label="Leave call (Ctrl + Alt + H)">Leave call</button>
                 <button aria-label="Turn on microphone (Ctrl + d)" onclick="this.setAttribute('aria-label',
                   this.getAttribute('aria-label').startsWith('Turn on')?'Turn off microphone (Ctrl + d)':'Turn on microphone (Ctrl + d)')">Microphone</button>
                 <script>setInterval(()=>{const tile=document.querySelector('[jsname]');const name=
                   tile.textContent.includes('Alice')?'Fixture Bob':'Fixture Alice';
-                  tile.textContent=name;tile.setAttribute('aria-label',name+' is speaking')},2000)</script>"""
+                  tile.textContent=name;tile.setAttribute('aria-label',name+' is speaking')},2000)</script></div>"""
                 from live_transcript.speech.browser import MIC_SCRIPT
 
                 page.context.add_init_script(MIC_SCRIPT)
                 page.context.grant_permissions(["microphone"], origin="https://meet.google.com")
-            page.route(url, lambda route: route.fulfill(content_type="text/html", body=body))
+            headers = (
+                {
+                    "Content-Security-Policy": "require-trusted-types-for 'script'; trusted-types default"
+                }
+                if args.provider == "google"
+                else {}
+            )
+            page.route(
+                url,
+                lambda route: route.fulfill(content_type="text/html", body=body, headers=headers),
+            )
             page.goto(url)
             voice_verified = False
+            native_input_verified = False
+            if args.provider == "google":
+                from live_transcript.providers.google_admission import prejoin
+                from live_transcript.providers.interaction import NativeInput
+
+                page.get_by_role("button", name="Input check", exact=True).click()
+                try:
+                    prejoin(
+                        page,
+                        "Fixture Recorder · Ä",
+                        timeout=15,
+                        interaction=NativeInput(page),
+                        diagnostics=out.with_suffix(".admission"),
+                    )
+                except Exception:
+                    print(
+                        "Native fixture field value:",
+                        repr(page.locator("#lobby input").input_value()),
+                        flush=True,
+                    )
+                    raise
+                native_input_verified = page.evaluate("window.fixtureNativeJoin === true")
+                assert native_input_verified, "Native join did not reach the selected control"
+                assert page.locator("#lobby input").input_value() == "Fixture Recorder · Ä"
+                print(
+                    "PASS native Google join and Unicode name; CDP click isTrusted:",
+                    page.evaluate("window.fixtureDomClick"),
+                    flush=True,
+                )
             if args.provider in ("zoom", "google"):
                 page.evaluate("""async () => {
                   const stream=await navigator.mediaDevices.getUserMedia({audio:true});
@@ -363,6 +407,7 @@ def main():
                 guard_restart=True,
                 provider=args.provider,
                 voice_verified=voice_verified,
+                native_input_verified=native_input_verified,
                 caption_failure_survived=True,
                 speaker_rows=len(rows),
                 speakers=sorted(names),

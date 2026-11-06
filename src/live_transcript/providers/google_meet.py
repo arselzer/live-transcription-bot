@@ -23,13 +23,18 @@ import uuid
 ORIGIN = "https://meet.google.com"
 from live_transcript.core.config import get
 
+from live_transcript.providers.google_admission import (
+    AdmissionRefused as AdmissionRefused,
+    button as button,
+    click_if_visible as click_if_visible,
+    visible as visible,
+    joined as joined,
+    prejoin as prejoin,
+    navigation_url,
+    watch_refusals,
+)
+
 VM_HOME = Path(get("vm", "home"))
-
-
-class AdmissionRefused(RuntimeError):
-    def __init__(self, message, reason="google_access_denied"):
-        super().__init__(message)
-        self.reason = reason
 
 
 def is_google_url(url):
@@ -50,33 +55,6 @@ def validate_url(url):
 def public_url(url):
     p = urlsplit(url)
     return urlunsplit((p.scheme, p.netloc, p.path, "", ""))
-
-
-def visible(locator):
-    return locator.first.is_visible()
-
-
-def button(pg, label):
-    pattern = re.compile(r"^" + re.escape(label) + r"(?:\s*\([^)]{1,80}\))?$", re.I)
-    return pg.get_by_role("button", name=pattern).first
-
-
-def click_if_visible(pg, label):
-    try:
-        b = button(pg, label)
-        if b.is_visible() and b.is_enabled():
-            b.click(timeout=2500)
-            return True
-    except Exception:
-        return False  # a transient UI action must not end archival capture
-    return False
-
-
-def joined(pg):
-    try:
-        return visible(button(pg, "Leave call"))
-    except Exception:
-        return False
 
 
 def optional_feature(callback, label, default=None):
@@ -107,81 +85,6 @@ def meeting_ended(page):
             except Exception:
                 pass
     return False
-
-
-def prejoin(pg, name, timeout=330):
-    """Submit once; Meet instant meetings admit guests immediately, while a
-    locked meeting needs the host to approve 'Ask to join'."""
-    end = time.monotonic() + timeout
-    asked = False
-    name_entered = False
-    last_status = ""
-    while time.monotonic() < end:
-        try:
-            if joined(pg):
-                return
-            # Meet's sign-in suggestion can cover Join now for anonymous guests.
-            # Dismiss only its informational acknowledgement, never sign in.
-            click_if_visible(pg, "Got it")
-            dialogs = pg.get_by_role("dialog").all_text_contents()
-            fatal = re.compile(
-                r"(?:meeting|call) code (?:is )?(?:invalid|doesn.t exist|not found)|"
-                r"this (?:meeting|call) (?:has ended|does(?:n.t)? exist)|"
-                r"(?:unable|failed) to (?:join|connect)|you (?:can.t|cannot) join",
-                re.I,
-            )
-            if any(fatal.search(t) for t in dialogs):
-                raise AdmissionRefused(
-                    "Google Meet refused the join; inspect meet-failure.png in the VM"
-                )
-            # Meet renders hard join denials as body text, not dialogs.
-            body = pg.evaluate("() => document.body.innerText.slice(0, 4000)")
-            from live_transcript.providers.admission import REASONS
-
-            if REASONS["google_access_denied"].search(body):
-                raise AdmissionRefused(
-                    "Google Meet refused access before admission; check guest access or use an approved signed-in profile"
-                )
-            if REASONS["google_sign_in_required"].search(body):
-                raise AdmissionRefused(
-                    "Google Meet requires a signed-in profile for this room",
-                    "google_sign_in_required",
-                )
-            if not asked:
-                field = pg.get_by_role("textbox").first
-                if field.is_visible() and (not name_entered or field.input_value() == ""):
-                    field.fill(name)
-                    field.press("Tab")
-                    name_entered = True
-                # Signed-in profiles need no name field. Submit exactly once
-                # for either immediate admission or the host's waiting room.
-                click_if_visible(pg, "Turn off microphone")
-                asked = click_if_visible(pg, "Join now") or click_if_visible(pg, "Ask to join")
-            status = (
-                "Waiting for Google Meet/host admission"
-                if asked
-                else "Waiting for Google Meet pre-join form"
-            )
-            if status != last_status:
-                print(status, flush=True)
-                last_status = status
-            pg.wait_for_timeout(1000)
-        except Exception as exc:
-            if any(
-                message in str(exc)
-                for message in (
-                    "Execution context was destroyed",
-                    "Cannot find context",
-                    "Frame was detached",
-                )
-            ):
-                pg.wait_for_timeout(500)
-                continue
-            raise
-    raise AdmissionRefused(
-        f"No confirmed admission within {timeout:g} seconds; no recording started",
-        "google_admission_timeout",
-    )
 
 
 # Meet tile internals are obfuscated; names come from participant tile
@@ -288,8 +191,8 @@ def run(argv=None):
     )
     ap.add_argument("--passcode", help="unused: Google Meet needs no passcode for room links")
     a = ap.parse_args(argv)
-    if not 1 <= a.max_min <= 480 or not a.name.strip() or len(a.name) > 64:
-        ap.error("--max-min must be positive and --name must contain 1–64 characters")
+    if not 1 <= a.max_min <= 480 or not a.name.strip() or len(a.name) > 60:
+        ap.error("--max-min must be positive and --name must contain 1–60 characters")
     if not os.environ.get("DISPLAY"):
         raise RuntimeError("Run under xvfb-run: headless Chromium cannot supply meeting audio")
     from playwright.sync_api import sync_playwright
@@ -340,13 +243,22 @@ def run(argv=None):
                         ],
                     )
                 )
+                if not get("browser", "google_private"):
+                    from live_transcript.providers.browser import google_profile_ready
+
+                    if not google_profile_ready(ctx):
+                        raise AdmissionRefused(
+                            "Dedicated Google profile is not signed in",
+                            "google_auth_session_missing",
+                        )
                 ctx.grant_permissions(["camera", "microphone"], origin=ORIGIN)
                 ctx.add_init_script(PEERS_JS)
                 ctx.add_init_script(MIC_SCRIPT)
                 pg = ctx.new_page()
                 pg.set_viewport_size({"width": 1280, "height": 800})
                 pg.on("dialog", lambda dialog: dialog.dismiss())
-                pg.goto(a.meeting, wait_until="domcontentloaded", timeout=60000)
+                watch_refusals(pg)
+                pg.goto(navigation_url(a.meeting), wait_until="domcontentloaded", timeout=60000)
                 if a.dry:
                     pg.wait_for_timeout(8000)
                     pg.screenshot(path=str(out.parent / "meet-prejoin.png"))
@@ -360,10 +272,43 @@ def run(argv=None):
                     )
                     print("DRY: inspected pre-join; did not join or record", flush=True)
                     return
-                prejoin(pg, a.name)
+                interaction = None
+                if get("google", "input_mode") == "native":
+                    from live_transcript.providers.interaction import NativeInput, NativeInputError
+
+                    try:
+                        interaction = NativeInput(pg)
+                    except NativeInputError as exc:
+                        raise AdmissionRefused(str(exc), "google_input_unavailable") from exc
+                remaining = min(
+                    a.max_min * 60,
+                    float(os.environ.get("LT_DEADLINE", time.time() + a.max_min * 60))
+                    - time.time(),
+                )
+                if remaining <= 0:
+                    raise AdmissionRefused(
+                        "Original meeting deadline expired", "google_admission_timeout"
+                    )
+                prejoin(
+                    pg,
+                    a.name,
+                    timeout=min(get("google", "admission_timeout"), remaining),
+                    interaction=interaction,
+                    require_sign_in=not get("browser", "google_private"),
+                    diagnostics=out.with_suffix(".admission"),
+                )
                 print("JOINED Google Meet (Leave call confirmed)", flush=True)
                 print(
-                    "ADMISSION_SUCCEEDED " + json.dumps(dict(name=a.name, provider="google")),
+                    "ADMISSION_SUCCEEDED "
+                    + json.dumps(
+                        dict(
+                            name=a.name if get("browser", "google_private") else None,
+                            provider="google",
+                            identity_source="guest"
+                            if get("browser", "google_private")
+                            else "profile",
+                        )
+                    ),
                     flush=True,
                 )
                 t0 = time.monotonic()
@@ -371,7 +316,25 @@ def run(argv=None):
                 (VM_HOME / "rec" / "speakers.jsonl").write_text("")
                 Path("/tmp/cap_session_start").write_text(str(started))
                 archive = Archive(out)
-                archive.start(started, a.max_min * 60, provider="google")
+                remaining = min(
+                    a.max_min * 60,
+                    float(os.environ.get("LT_DEADLINE", started + a.max_min * 60)) - started,
+                )
+                if remaining <= 0:
+                    raise AdmissionRefused(
+                        "Original meeting deadline expired", "google_admission_timeout"
+                    )
+                recording_deadline = time.monotonic() + remaining
+                archive.start(started, remaining, provider="google")
+                import shutil
+
+                if out.with_suffix(".admission").is_dir():
+                    optional_feature(
+                        lambda: shutil.copytree(
+                            out.with_suffix(".admission"), archive.root / "admission"
+                        ),
+                        "admission evidence copy",
+                    )
                 print("ARCHIVE to", archive.root, flush=True)
                 # Record immediately after admission, before camera setup delays.
                 audio = children.start(
@@ -402,7 +365,11 @@ def run(argv=None):
                             "out": str(out),
                             "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                             "meeting": public_url(a.meeting),
-                            "name": a.name,
+                            "name": a.name if get("browser", "google_private") else None,
+                            "requested_name": a.name,
+                            "identity_source": "guest"
+                            if get("browser", "google_private")
+                            else "profile",
                             "provider": "google",
                         }
                     )
@@ -447,7 +414,7 @@ def run(argv=None):
                 next_camera_attempt = 0
                 next_streamer_attempt = 0
                 renderer_started = time.monotonic()
-                while time.monotonic() - t0 < a.max_min * 60:
+                while time.monotonic() < recording_deadline:
                     if pg.is_closed():
                         raise RuntimeError("Meeting tab closed unexpectedly")
                     now = time.monotonic()

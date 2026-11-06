@@ -61,7 +61,7 @@ Paths below are relative to `src/live_transcript/`.
 | Presentation | `presentation/`, `notes/board.py` | 4:3 camera; crop-safe captions; evidence-grounded summary hints |
 | Retrieval/processing | `storage/pull.py`, `storage/worker.py`, `runtime/postprocess.py` | Verify inventory; retain originals; report gaps; checkpoint stages |
 | Supervision | `runtime/watchdog.py` | Unknown is not dead; bounded restart; preserve deadline |
-| Admission/UI rescue | `providers/admission.py`, `providers/rescue.py` | Scoped evidence; trusted controls; stale-plan rejection; bounded actions |
+| Admission/UI rescue | `providers/admission.py`, `providers/google_admission.py`, `providers/rescue.py` | Scoped evidence; trusted controls; stale-plan rejection; bounded actions |
 
 ## Lifecycle
 

@@ -115,3 +115,15 @@ Source-archive checks inspect tar ownership, group, PAX headers and timestamps,
 not only file contents. The packaging hook normalizes these fields in a private
 temporary archive before publishing the final artifact. Editable install metadata
 contains local paths and is excluded from release/source selection.
+
+
+Google native-input drills serve their page with Trusted Types enforced, matching
+a real Meet constraint. Pointer calibration must use bounded direct reads, not
+string-evaluating polling. The fixture checks Unicode case preservation, actual
+pointer targeting, microphone mute restoration, speaker evidence and retained
+media after capture failures. Passing it does not establish provider admission.
+
+Wheel builds use a fresh snapshot of reviewed source. A previous setuptools
+`build/lib` directory must not contribute deleted modules. Release verification
+compares wheel member names and bytes with the reviewed package, in addition to
+building from the source archive and scanning artifact contents for private data.

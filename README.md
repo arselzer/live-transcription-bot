@@ -12,6 +12,7 @@ Before joining a meeting, you need:
 - A Linux host with Python 3.11+, FFmpeg, SSH, rsync, netcat, and systemd user services.
 - A dedicated browser VM reachable over SSH. It needs Chromium/Playwright,
   Xvfb, PulseAudio, a dummy ALSA microphone, Pillow, and a V4L2 loopback camera.
+  Google Meet native input additionally needs `xdotool` and `xclip` in the VM.
 - A working whisper.cpp build, a multilingual Whisper model and Silero VAD model.
 - An optional OpenAI-compatible local model endpoint for meeting summaries.
 
