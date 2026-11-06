@@ -50,6 +50,15 @@ DEFAULTS = {
         "home": "/home/transcript",
         "ip": "",
         "manage_libvirt": True,
+        "identity_file": "",
+        "known_hosts": "",
+        "python": "python3",
+    },
+    "services": {
+        "captions": "captiond.service",
+        "primary": "whisper-stt.service",
+        "cpu_large": "whisper-stt-cpu.service",
+        "cpu_small": "whisper-stt-cpu-small.service",
     },
     "audio": {"sink": "transcript"},
     "google": {"input_mode": "native", "admission_timeout": 330.0},
@@ -65,6 +74,7 @@ DEFAULTS = {
         "commit_once": True,
     },
     "asr": {
+        "primary_device": "gpu",
         "cpu_fallback": True,
         "adaptive_model": True,
         "cpu_url": "http://127.0.0.1:9092/inference",
@@ -153,6 +163,18 @@ def load(path=None):
         if value:
             config["paths"][key] = os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
     vm = config["vm"]
+    if not vm["python"] or vm["python"].startswith("-") or any(ord(c) < 32 for c in vm["python"]):
+        raise ValueError("invalid VM python executable")
+    for key in ("identity_file", "known_hosts"):
+        if vm[key]:
+            vm[key] = os.path.abspath(os.path.expandvars(os.path.expanduser(vm[key])))
+            if any(ord(c) < 32 for c in vm[key]):
+                raise ValueError("invalid VM " + key)
+    for value in config["services"].values():
+        if value and not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.@-]*\.service", value):
+            raise ValueError("invalid service unit name")
+    if config["asr"]["primary_device"] not in ("gpu", "cpu"):
+        raise ValueError("asr.primary_device must be gpu or cpu")
     for key in ("ssh", "name", "ip"):
         value = vm[key]
         if value.startswith("-") or any(c.isspace() or ord(c) < 32 for c in value):
@@ -244,6 +266,36 @@ def get(section, key):
     return CONFIG[section][key]
 
 
+def ssh_options():
+    """Use installation-scoped credentials consistently for control and copies."""
+    options = ["-o", "BatchMode=yes"]
+    if get("vm", "identity_file"):
+        options += ["-i", get("vm", "identity_file"), "-o", "IdentitiesOnly=yes"]
+    if get("vm", "known_hosts"):
+        options += [
+            "-o",
+            "UserKnownHostsFile=" + get("vm", "known_hosts"),
+            "-o",
+            "StrictHostKeyChecking=yes",
+        ]
+    return options
+
+
+def ssh_transport():
+    return shlex.join(
+        [
+            "ssh",
+            *ssh_options(),
+            "-o",
+            "ConnectTimeout=6",
+            "-o",
+            "ServerAliveInterval=10",
+            "-o",
+            "ServerAliveCountMax=3",
+        ]
+    )
+
+
 def shell_values():
     mapping = {
         "LIVE_TRANSCRIPT_CONFIG": CONFIG["_file"],
@@ -254,6 +306,10 @@ def shell_values():
         "LT_VM_NAME": get("vm", "name"),
         "LT_VM_HOME": get("vm", "home"),
         "LT_VM_IP": get("vm", "ip"),
+        "LT_VM_PYTHON": get("vm", "python"),
+        "LT_SSH_IDENTITY": get("vm", "identity_file"),
+        "LT_SSH_KNOWN_HOSTS": get("vm", "known_hosts"),
+        "LT_CAPTION_UNIT": get("services", "captions"),
         "LT_CAPTION_HOST": get("caption", "host"),
         "LT_CAPTION_PORT": str(get("caption", "port")),
         "LT_SAFETY": get("paths", "safety_copies"),
@@ -277,7 +333,7 @@ def write_vm_config(destination):
         "identity": CONFIG["identity"],
         "model": CONFIG["model"],
         "paths": {"root": home},
-        "vm": {"home": home},
+        "vm": {"home": home, "python": get("vm", "python")},
     }
     text = "\n".join(
         "["

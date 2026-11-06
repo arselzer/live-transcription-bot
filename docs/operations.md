@@ -17,7 +17,7 @@ watchdog is repair-capable unless `--dry-run` is supplied.
 | UI media control drifts | Semantic recovery candidates; bounded policy/local-model selection | Inspect `ui-health.json`, events and failure screenshots |
 | Unsupported UI/HTML change | Escalate `needs_operator`; keep capture running where possible | Fix selectors or use a scoped operator session; do not blindly reload |
 | Speaker selectors fail | Preserve empty/error observation and screenshot evidence; watchdog reports | Treat labels as uncertain; audio remains authoritative |
-| NAS hangs | Independent local safety worker continues | Inspect local `backup-status.json`; primary VM originals retained |
+| Archive storage stalls | Independent local safety worker continues | Inspect local `backup-status.json`; primary VM originals retained |
 | Safety quota/disk reserve reached | Report capacity limit, retain old and original files | Add space or choose retention explicitly |
 | Capture writer crashes | Independent supervisor restarts with unique generation | Verify recovered gaps and alternate WAV coverage |
 | Host denies/locks/CAPTCHA | Terminal state; no automatic repeated entry | Correct circumstances before explicit new join |
@@ -77,7 +77,7 @@ acknowledgements are not automatically discarded.
 Inspect `.transcript-quality.json`, `.transcription.json` and
 `.postprocess-status.json` beside a recording. Processing status is also written
 to local logs as `postprocess-SESSION.json` so watchdog inspection does not touch
-the NAS. Recognition failures are reported by the existing watchdog. A per-recording
+archive storage. Recognition failures are reported by the existing watchdog. A per-recording
 lock serializes reprocessing; a quality-checked cache keyed by audio SHA-256,
 model file identity and decoder settings avoids repeating full recognition when
 only summary/video generation is being retried. Changed audio invalidates it.

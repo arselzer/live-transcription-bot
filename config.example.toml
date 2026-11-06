@@ -24,6 +24,16 @@ ip = "192.0.2.20"
 name = "transcript"
 home = "/home/transcript"
 manage_libvirt = false
+# python = "/path/to/guest/venv/bin/python"
+# identity_file = "~/.config/live-transcript/ssh-key"
+# known_hosts = "~/.config/live-transcript/known_hosts"
+
+[services]
+# Empty unit names mean another supervisor owns the corresponding endpoint.
+captions = "captiond.service"
+primary = "whisper-stt.service"
+cpu_large = "whisper-stt-cpu.service"
+cpu_small = "whisper-stt-cpu-small.service"
 
 [audio]
 sink = "transcript"
@@ -77,6 +87,7 @@ timezone = "UTC"
 url_file = "~/.config/meetbot/calendar_url"
 
 [asr]
+primary_device = "gpu" # Use "cpu" for a CPU-only primary service.
 cpu_fallback = true
 adaptive_model = true
 cpu_url = "http://127.0.0.1:9092/inference"

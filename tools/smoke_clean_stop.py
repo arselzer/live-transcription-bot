@@ -4,7 +4,7 @@
 import json
 import shlex
 from pathlib import Path
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options
 from live_transcript.worker import guest_command
 from tools.run_tts_e2e import deploy_test_bundle
 
@@ -16,7 +16,7 @@ import uuid
 
 def ssh(command, timeout=15):
     return subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", get("vm", "ssh"), command],
+        ["ssh", *ssh_options(), "-o", "ConnectTimeout=5", get("vm", "ssh"), command],
         check=True,
         capture_output=True,
         text=True,
@@ -37,7 +37,7 @@ def main():
     log = Path(get("paths", "logs")) / "clean-stop-fixture.log"
     with log.open("wb") as fh:
         proc = subprocess.Popen(
-            ["ssh", get("vm", "ssh"), command], stdout=fh, stderr=subprocess.STDOUT
+            ["ssh", *ssh_options(), get("vm", "ssh"), command], stdout=fh, stderr=subprocess.STDOUT
         )
     try:
         deadline = time.monotonic() + 25

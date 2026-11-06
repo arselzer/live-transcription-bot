@@ -26,7 +26,7 @@ def maintenance_active(path=None):
 
 
 def prepare_link(source, destination, policy_path=None):
-    """Validate the local symlink without touching the NAS on the join path."""
+    """Validate the local symlink without touching archive storage on the join path."""
     source, destination = Path(source), Path(destination)
     if os.path.abspath(source) == os.path.abspath(destination) and not source.is_symlink():
         source.mkdir(parents=True, exist_ok=True, mode=0o700)
@@ -52,12 +52,12 @@ def prepare_link(source, destination, policy_path=None):
         policy = json.loads(policy_path.read_text())
         if shutil.disk_usage("/").free < policy.get("host_free_reserve_bytes", 0):
             raise RuntimeError(
-                "NVMe recording reserve reached; free local disk space before starting another meeting"
+                "Local recording reserve reached; free local disk space before starting another meeting"
             )
 
 
 def ensure_archive_volume(destination):
-    """Background-only check; never write beneath an unmounted NAS path."""
+    """Background-only check; never write beneath an unmounted archive path."""
     configured_mount = get("paths", "archive_mount")
     if configured_mount:
 

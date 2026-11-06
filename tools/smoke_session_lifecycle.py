@@ -4,7 +4,7 @@
 import json
 import shlex
 from pathlib import Path
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options
 from live_transcript.worker import guest_command
 from tools.run_tts_e2e import deploy_test_bundle
 
@@ -18,7 +18,7 @@ VM = get("vm", "ssh")
 
 def ssh(command, check=True, timeout=10):
     return subprocess.run(
-        ["ssh", "-o", "ConnectTimeout=5", VM, command],
+        ["ssh", *ssh_options(), "-o", "ConnectTimeout=5", VM, command],
         capture_output=True,
         text=True,
         check=check,
@@ -38,7 +38,7 @@ def main():
         "exec " + shlex.join(guest_command("session", test=True))
     )
     follower = subprocess.Popen(
-        ["ssh", "-o", "ConnectTimeout=5", VM, command],
+        ["ssh", *ssh_options(), "-o", "ConnectTimeout=5", VM, command],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
     )

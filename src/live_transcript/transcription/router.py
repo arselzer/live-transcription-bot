@@ -12,7 +12,10 @@ class ASRRouter:
         self.backlog = 0
         self.cpu_slow_samples = 0
         self.cpu_small = False
-        self.health = dict(engine="gpu-large", degraded=False, switches=0)
+        self.primary_engine = (
+            "cpu-primary" if get("asr", "primary_device") == "cpu" else "gpu-large"
+        )
+        self.health = dict(engine=self.primary_engine, degraded=False, switches=0)
 
     def note_backlog(self, seconds):
         self.backlog = max(0, float(seconds))
@@ -22,7 +25,7 @@ class ASRRouter:
             self.health["switches"] += 1
         self.health.update(
             engine=engine,
-            degraded=engine != "gpu-large",
+            degraded=engine != self.primary_engine,
             error=error,
             utc=time.time(),
             backlog_seconds=round(self.backlog, 2),
@@ -40,12 +43,30 @@ class ASRRouter:
             if time.monotonic() >= self.primary_retry_at:
                 try:
                     started = time.monotonic()
-                    result = request(path, language, prompt, timeout=get("asr", "gpu_timeout"))
+                    cpu_primary = self.primary_engine == "cpu-primary"
+                    result = request(
+                        path,
+                        language,
+                        prompt,
+                        timeout=get("asr", "cpu_timeout" if cpu_primary else "gpu_timeout"),
+                    )
                     if result is None:
                         raise RuntimeError("primary backend returned no result")
-                    self.primary_retry_at = 0
-                    self.cpu_slow_samples, self.cpu_small = 0, False
-                    self.selected("gpu-large", rtf=(time.monotonic() - started) / max(0.1, seconds))
+                    rtf = (time.monotonic() - started) / max(0.1, seconds)
+                    if cpu_primary and rtf > get("asr", "slow_rtf"):
+                        self.cpu_slow_samples += 1
+                    else:
+                        self.cpu_slow_samples = 0
+                    behind = self.backlog > get(
+                        "asr", "backlog_seconds"
+                    ) or self.cpu_slow_samples >= get("asr", "slow_samples")
+                    self.primary_retry_at = (
+                        time.monotonic() + get("asr", "gpu_retry_seconds")
+                        if cpu_primary and behind and get("asr", "adaptive_model")
+                        else 0
+                    )
+                    self.cpu_small = bool(self.primary_retry_at)
+                    self.selected(self.primary_engine, rtf=rtf)
                     if hasattr(result, "__dict__"):
                         result.backend = dict(self.health)
                     return result
@@ -71,6 +92,8 @@ class ASRRouter:
             if not get("asr", "adaptive_model"):
                 engines = [("cpu-large", get("asr", "cpu_url"))]
             for engine, endpoint in engines:
+                if self.primary_engine == "cpu-primary" and endpoint == get("caption", "stt_url"):
+                    continue  # do not enqueue the same failed inference a second time
                 try:
                     started = time.monotonic()
                     result = request(

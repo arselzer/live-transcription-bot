@@ -8,7 +8,7 @@ from live_transcript.worker import guest_command, command as worker_command
 
 import json
 from pathlib import Path
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options
 
 guest_home = get("vm", "home")
 import re
@@ -44,7 +44,7 @@ def deploy_test_bundle():
         bundle = Path(directory) / "live-transcript-test.pyz"
         build_bundle(bundle, with_test_tools=True)
         target = get("vm", "ssh") + ":" + get("vm", "home") + "/live-transcript-test.pyz"
-        subprocess.run(["scp", "-q", str(bundle), target], check=True, timeout=30)
+        subprocess.run(["scp", *ssh_options(), "-q", str(bundle), target], check=True, timeout=30)
 
 
 def main():
@@ -66,6 +66,7 @@ def main():
     subprocess.run(
         [
             "ssh",
+            *ssh_options(),
             get("vm", "ssh"),
             f"if [ -f {guest_home}/tts-test/spoken.jsonl ]; then "
             f"mv {guest_home}/tts-test/spoken.jsonl {guest_home}/tts-test/spoken.previous.jsonl; fi",
@@ -73,7 +74,9 @@ def main():
         check=True,
     )
     session_start = float(
-        subprocess.check_output(["ssh", get("vm", "ssh"), "cat /tmp/cap_session_start"], text=True)
+        subprocess.check_output(
+            ["ssh", *ssh_options(), get("vm", "ssh"), "cat /tmp/cap_session_start"], text=True
+        )
     )
     stopped = threading.Event()
     events = []
@@ -114,7 +117,7 @@ def main():
     voice_reply = None
     with open(out / "sender.log", "w", buffering=1) as log:
         proc = subprocess.Popen(
-            ["ssh", get("vm", "ssh"), remote],
+            ["ssh", *ssh_options(), get("vm", "ssh"), remote],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
@@ -147,6 +150,7 @@ def main():
     subprocess.run(
         [
             "scp",
+            *ssh_options(),
             "-q",
             get("vm", "ssh") + ":" + guest_home + "/tts-test/spoken.jsonl",
             str(out / "spoken.jsonl"),
@@ -197,6 +201,7 @@ def main():
         raw = subprocess.check_output(
             [
                 "ssh",
+                *ssh_options(),
                 get("vm", "ssh"),
                 f"cat {guest_home}/voice_requests/done/" + voice_id + ".json",
             ],

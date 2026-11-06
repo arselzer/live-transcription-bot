@@ -6,6 +6,77 @@ import live_transcript.core.config as runtime_config
 
 
 class RouterTests(unittest.TestCase):
+    def test_sustained_slow_cpu_primary_temporarily_uses_small_standby(self):
+        original = runtime_config.get
+        calls = []
+
+        def setting(section, key):
+            if (section, key) == ("asr", "primary_device"):
+                return "cpu"
+            if (section, key) == ("asr", "cpu_url"):
+                return original("caption", "stt_url")
+            return original(section, key)
+
+        def request(*args, **kwargs):
+            calls.append(kwargs)
+            return [(0, "retained")]
+
+        with (
+            patch("live_transcript.transcription.router.get", side_effect=setting),
+            patch(
+                "live_transcript.transcription.router.time.monotonic",
+                side_effect=[0, 0, 2, 3, 3, 5, 5, 6, 6, 8],
+            ),
+        ):
+            router = ASRRouter()
+            for _ in range(3):
+                router.transcribe(request, "wav", "de", "", 1)
+        self.assertNotIn("endpoint", calls[0])
+        self.assertNotIn("endpoint", calls[1])
+        self.assertEqual(calls[2]["endpoint"], original("asr", "small_cpu_url"))
+        self.assertEqual(router.health["engine"], "cpu-small")
+        self.assertTrue(router.health["degraded"])
+
+    def test_cpu_primary_uses_cpu_timeout_and_truthful_health(self):
+        original = runtime_config.get
+
+        def setting(section, key):
+            return "cpu" if (section, key) == ("asr", "primary_device") else original(section, key)
+
+        calls = []
+        with patch("live_transcript.transcription.router.get", side_effect=setting):
+            router = ASRRouter()
+            router.transcribe(
+                lambda *a, **kw: calls.append(kw) or [(0, "accurate")], "wav", "de", "", 3
+            )
+        self.assertEqual(calls[0]["timeout"], original("asr", "cpu_timeout"))
+        self.assertEqual(router.health["engine"], "cpu-primary")
+        self.assertFalse(router.health["degraded"])
+
+    def test_cpu_primary_failure_never_requeues_the_same_endpoint_as_standby(self):
+        original = runtime_config.get
+
+        def setting(section, key):
+            if (section, key) == ("asr", "primary_device"):
+                return "cpu"
+            if (section, key) == ("asr", "cpu_url"):
+                return original("caption", "stt_url")
+            return original(section, key)
+
+        calls = []
+
+        def request(*a, **kw):
+            calls.append(kw)
+            if "endpoint" not in kw:
+                raise ConnectionError("primary down")
+            return [(0, "fallback")]
+
+        with patch("live_transcript.transcription.router.get", side_effect=setting):
+            router = ASRRouter()
+            router.transcribe(request, "wav", "de", "", 3)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(calls[1]["endpoint"], original("asr", "small_cpu_url"))
+
     def test_healthy_gpu_never_downgrades_even_with_backlog(self):
         router = ASRRouter()
         router.note_backlog(100)

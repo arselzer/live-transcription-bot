@@ -30,7 +30,7 @@ def main():
     _owner = os.environ.get("LT_PREP_OWNER", "")
     _parent_args = Path(f"/proc/{os.getppid()}/cmdline").read_bytes().split(b"\0")
     _leased_preparation = _owner == str(os.getppid()) and is_role_process(
-        _parent_args, {"prepare", "session"}
+        _parent_args, {"prepare", "session", "check-media"}
     )
     if not _leased_preparation:
         assert_idle()

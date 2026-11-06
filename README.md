@@ -4,101 +4,62 @@ A self-hosted meeting recorder with live captions, meeting notes, a caption
 camera, and optional text-to-speech. Operate it with **`live-transcript`**.
 Zoom and Proton Meet adapters are included; Google Meet support is experimental.
 
-## What you need
+## Install and set up
 
-This is a Linux application with a browser VM, not a bot hosted by this repository.
-Before joining a meeting, you need:
-
-- A Linux host with Python 3.11+, FFmpeg, SSH, rsync, netcat, and systemd user services.
-- A dedicated browser VM reachable over SSH. It needs Chromium/Playwright,
-  Xvfb, PulseAudio, a dummy ALSA microphone, Pillow, and a V4L2 loopback camera.
-  Google Meet native input additionally needs `xdotool` and `xclip` in the VM.
-- A working whisper.cpp build, a multilingual Whisper model and Silero VAD model.
-- An optional OpenAI-compatible local model endpoint for meeting summaries.
-
-If you already have that infrastructure, follow the steps below.
-For preparing the VM and speech services, see [deployment](docs/deployment.md).
-No model weights, recordings, VM image, or private configuration are included.
-
-## 1. Install
-
-From this checkout:
+Automatic setup currently supports an x86-64 Linux host with KVM virtualization,
+Python 3.11+, an apt-based distribution, sudo access, and a systemd user manager.
+Allow at least 16 GiB RAM (24 GiB for GPU plus full CPU standby), local disk space
+for the VM/models/recordings, and internet access for the initial downloads.
+The browser always runs inside its own VM.
 
 ```bash
-python3 -m venv .venv
-.venv/bin/pip install -e '.[cpu]'
+./install.sh --plan
+./install.sh
 source .venv/bin/activate
-live-transcript --help
-```
-
-The `cpu` extra provides the optional faster-whisper fallback for final
-postprocessing. Live GPU/CPU speech services use your native whisper.cpp build.
-The host does not need a browser; install Playwright/Chromium in the browser VM.
-
-## 2. Configure your host and VM
-
-Create a private profile. This example uses a separate filename so it does not
-replace an existing installation's configuration:
-
-```bash
-mkdir -p "$HOME/.config/live-transcript"
-export LIVE_TRANSCRIPT_CONFIG="$HOME/.config/live-transcript/bot.toml"
-test -e "$LIVE_TRANSCRIPT_CONFIG" || install -m 600 config.example.toml "$LIVE_TRANSCRIPT_CONFIG"
-```
-
-Edit that file before continuing. At minimum, set:
-
-| Setting | What to enter |
-| --- | --- |
-| `vm.ssh` | SSH destination for your prepared browser VM, such as `transcript@YOUR_VM_IP` |
-| `vm.home` | The VM user's absolute home directory |
-| `caption.host` / `caption.bind` | A host interface the VM can reach; use a trusted isolated network |
-| `paths.whisper_cli` / `paths.whisper_server` | Your whisper.cpp executables |
-| `paths.model` / `paths.vad` | Existing local Whisper and VAD model files |
-| `paths.small_model` | Smaller local model for emergency CPU backlog fallback |
-| `paths.cpu_model` | Local faster-whisper model directory for final CPU postprocessing |
-| `paths.recordings` / `paths.safety_copies` | Private storage directories with adequate space |
-| `model.url` / `model.name` | Your summary model endpoint and its served model name, if used |
-
-`paths.root` is a **data workspace**, not the location of the source checkout.
-`audio.sink` defaults to `transcript`; set it explicitly when reusing an existing
-VM audio topology. Example IPs in the configuration must be replaced.
-
-Verify SSH access and its host key using your actual destination:
-
-```bash
-ssh transcript@YOUR_VM_IP true
-```
-
-Keep the same `LIVE_TRANSCRIPT_CONFIG` setting in each operator terminal and in
-service environments. You can also pass `--config FILE` before a CLI subcommand.
-
-## 3. Start the local services
-
-For an initial foreground setup, use separate terminals with the same private
-profile selected:
-
-```bash
-live-transcript serve asr --device gpu
-live-transcript serve asr --device cpu-large
-live-transcript serve asr --device cpu-small
-live-transcript serve captions
-```
-
-Each command stays running. The CPU standbys are used when the GPU fails or the
-full model cannot keep up. For unattended use, install the service templates in
-[deploy/systemd](deploy/systemd) and configure their executable/profile paths as
-explained in [deployment](docs/deployment.md).
-
-Then check readiness:
-
-```bash
 live-transcript doctor
 ```
 
-Resolve failed checks before a real meeting. Doctor does not join a room.
+`install.sh` prepares the Python environment and runs `live-transcript setup`.
+For an already installed package, run `live-transcript setup` directly.
+`setup` installs missing host tools, creates an owned Ubuntu browser VM, installs
+Chromium and its audio/video devices, builds a pinned whisper.cpp revision,
+downloads checksum-verified full/small/VAD speech models, and creates the private
+profile and services. It tests actual audio capture and caption-camera output
+without joining a meeting. The portable default uses CPU recognition; full-model
+recognition is preferred and originals are retained if live processing falls behind.
 
-## 4. Join and record a meeting
+The default profile is `~/.config/live-transcript/config.toml`. Setup refuses to
+replace an unrelated profile or VM. If you already have an installation, select
+an isolated new profile with `live-transcript --config /path/to/new.toml setup`;
+use that same `--config` for subsequent commands. Rerun the same setup command to
+resume an interrupted installation. Edited profiles and changed setup plans are
+protected from automatic replacement.
+
+Storage defaults to local directories. An additional archive disk or remote
+archive destination is optional. No storage server, Hermes account, meeting link,
+model weight, recording or credential is included in this repository.
+
+## Deployment choices
+
+- **Default:** managed browser VM; native host speech services supervised by systemd.
+- **Compose speech:** `live-transcript setup --speech-supervisor compose` runs CPU
+  speech services in Docker Compose. Browser, camera and original capture stay in
+  the VM; the controller/caption service remain on the host.
+- **Existing infrastructure:** configure a prepared VM and existing speech endpoints
+  using [config.example.toml](config.example.toml) and [deployment](docs/deployment.md).
+  Empty names under `[services]` disable local service management for externally
+  supervised endpoints.
+
+Use `setup --help` for VM resources, local disk location, backend, installation
+workspace, and preparation without starting services. CUDA/HIP builds require
+an already working vendor driver/toolchain; CPU setup needs no GPU software.
+Summaries use an optional OpenAI-compatible endpoint configured under `[model]`.
+TTS is optional and its voice assets are described in [deployment](docs/deployment.md#optional-tts).
+
+See the [architecture review](docs/deployment-architecture.md) for supervision,
+container, recovery, storage, and deployment tradeoffs.
+
+## Join and record a meeting
 
 Use the full invitation and keep it quoted:
 
@@ -128,7 +89,7 @@ Recording starts after confirmed admission. The display name comes from
 A Proton invitation's `#pwd-...` fragment is required. Keep real invitations and
 passcodes out of shared terminal logs and shell history.
 
-## 5. Check progress and stop
+## Check progress and stop
 
 In another terminal with the same profile:
 
@@ -146,7 +107,7 @@ Use `live-transcript --json status` or `live-transcript --json jobs` for automat
 Losing the SSH/log connection does not itself stop the detached guest recorder.
 Use `stop` when you intend to leave the meeting.
 
-## 6. Find the recording and notes
+## Find the recording and notes
 
 Look in your configured `paths.recordings` directory. The example profile uses
 `~/.local/share/live-transcript/recordings`. A session produces:
@@ -206,7 +167,7 @@ ICS URL file and the correct `calendar.timezone`.
 | Bot has left but notes are missing | `jobs` and its checkpoint; final processing is asynchronous |
 | GPU fails | CPU standby health and queued audio; preserve originals for full-model reprocessing |
 | Speaker labels look wrong | Treat UI-derived names as uncertain, especially at speaker changes or overlap |
-| NAS is unavailable | Local safety-copy status and retained VM originals; do not delete evidence |
+| Archive storage is unavailable | Local safety-copy status and retained VM originals; do not delete evidence |
 
 See [operations and recovery](docs/operations.md) for failure handling. The caption
 TCP protocol assumes a trusted network. Overlapping voices, poor audio and

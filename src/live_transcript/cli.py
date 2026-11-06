@@ -35,7 +35,7 @@ def current():
 
 
 def remote_status(meeting):
-    from live_transcript.core.config import get
+    from live_transcript.core.config import get, ssh_options
 
     token = meeting.get("run_id")
     if not token:
@@ -49,6 +49,7 @@ def remote_status(meeting):
     result = subprocess.run(
         [
             "ssh",
+            *ssh_options(),
             "-o",
             "BatchMode=yes",
             "-o",
@@ -73,8 +74,8 @@ def remote_status(meeting):
 
 
 def doctor():
-    """Read-only preflight. Never load another model or touch the archive NAS."""
-    from live_transcript.core.config import get
+    """Read-only preflight. Never load another model or touch archive storage."""
+    from live_transcript.core.config import get, ssh_options
 
     checks = []
 
@@ -165,12 +166,13 @@ def doctor():
             result = subprocess.run(
                 [
                     "ssh",
+                    *ssh_options(),
                     "-o",
                     "BatchMode=yes",
                     "-o",
                     "ConnectTimeout=5",
                     get("vm", "ssh"),
-                    "python3 -c " + shlex.quote(code),
+                    shlex.join([get("vm", "python"), "-c", code]),
                 ],
                 capture_output=True,
                 text=True,
@@ -218,6 +220,13 @@ def main(argv=None):
     )
     parser.add_argument("--version", action="version", version="live-transcript 0.1.0")
     commands = parser.add_subparsers(dest="command", required=True)
+    from live_transcript.runtime.installation import setup_options
+
+    setup_options(
+        commands.add_parser(
+            "setup", help="provision a standalone installation and isolated browser VM"
+        )
+    )
     for name in ("doctor", "status", "config"):
         commands.add_parser(name)
     start = commands.add_parser(
@@ -257,6 +266,15 @@ def main(argv=None):
     bundle = commands.add_parser("bundle", help="build the self-contained browser-guest program")
     bundle.add_argument("output")
     args = parser.parse_args(argv)
+    if args.command == "setup":
+        from live_transcript.runtime.installation import run as install
+
+        try:
+            emit(install(args, args.config), args.json)
+            return 0
+        except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+            emit(dict(ok=False, error=str(exc)), args.json)
+            return 1
     if args.config:
         os.environ["LIVE_TRANSCRIPT_CONFIG"] = str(Path(args.config).expanduser().absolute())
         if not Path(os.environ["LIVE_TRANSCRIPT_CONFIG"]).is_file():
@@ -266,7 +284,7 @@ def main(argv=None):
 
         # Supports embedded callers invoking main() with another configuration.
         runtime_config.CONFIG = runtime_config.load()
-        from live_transcript.core.config import get
+        from live_transcript.core.config import get, ssh_options
 
         if args.command == "config":
             emit(runtime_config.CONFIG, args.json)
@@ -325,6 +343,7 @@ def main(argv=None):
             return subprocess.run(
                 [
                     "ssh",
+                    *ssh_options(),
                     "-o",
                     "ConnectTimeout=5",
                     "-o",

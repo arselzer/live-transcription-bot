@@ -13,7 +13,7 @@ flowchart LR
   Browser --> UI[Bounded UI recovery]
   Guard --> Raw[FLAC / MKV / snapshots / speaker evidence]
   Raw --> Local[Independent local safety worker]
-  Raw --> NAS[Independent archive worker]
+  Raw --> Archive[Independent archive worker]
   Browser --> Upload[Durable audio uploader]
   Upload --> Journal[SQLite WAL receipts / audio queue]
   Journal --> ASR[Speech engine]
@@ -104,3 +104,10 @@ Do not replace the working provider path until a candidate passes the same real
 room, speaker-switch, overlap, mute-state and capture-preservation tests. Native
 participant-track capture through an approved SDK is a longer-term alternative
 to DOM-derived speaker identity and a mixed audio sink.
+
+
+Automatic infrastructure setup is owned by `runtime/installation.py` and
+`runtime/provision.py`; `runtime/containers.py` generates optional host-only
+speech containers. These are outside provider admission and capture logic.
+See [the deployment review](deployment-architecture.md) for current decisions and
+remaining architecture limitations.

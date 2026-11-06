@@ -129,3 +129,12 @@ include tools/smoke_session_lifecycle.py
 include tools/smoke_ui_rescue.py
 include tools/stop_recording_fixture.py
 include tools/tts_test_bot.py
+include src/live_transcript/runtime/installation.py
+include src/live_transcript/runtime/provision.py
+include src/live_transcript/runtime/guest-bootstrap.sh
+include src/live_transcript/runtime/media_check.py
+include tests/test_installation.py
+include src/live_transcript/runtime/containers.py
+include src/live_transcript/runtime/whisper.Dockerfile
+include docs/deployment-architecture.md
+include install.sh

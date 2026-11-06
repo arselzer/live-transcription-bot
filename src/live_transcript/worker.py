@@ -15,6 +15,7 @@ ROLES = {
     "session": "live_transcript.runtime.session",
     "join": "live_transcript.providers.zoom",
     "prepare": "live_transcript.runtime.prepare",
+    "check-media": "live_transcript.runtime.media_check",
     "audio": "live_transcript.capture.audio",
     "capture": "live_transcript.capture.guard",
     "observe": "live_transcript.capture.observer",
@@ -72,7 +73,13 @@ def guest_command(role, *arguments, test=False):
     if role not in ROLES:
         raise ValueError("Unknown worker role")
     name = "live-transcript-test.pyz" if test else BUNDLE_NAME
-    return ["python3", "-u", str(Path(get("vm", "home")) / name), role, *map(str, arguments)]
+    return [
+        get("vm", "python"),
+        "-u",
+        str(Path(get("vm", "home")) / name),
+        role,
+        *map(str, arguments),
+    ]
 
 
 def is_role_process(arguments, roles):

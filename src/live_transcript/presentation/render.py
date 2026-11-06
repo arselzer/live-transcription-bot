@@ -392,7 +392,11 @@ def frame(t0):
     engine = gpu.get("asr", {}).get("engine", "gpu-large")
     if engine != "gpu-large":
         stt += " " + engine.upper()
-    tech = f"{stt} · GPU {gpu.get('util', 0):.0f}% · {gpu.get('watts', 0):.0f}W · {gpu.get('temp', 0):.0f}°C"
+    tech = (
+        f"{stt} · CPU"
+        if engine.startswith("cpu")
+        else f"{stt} · GPU {gpu.get('util', 0):.0f}% · {gpu.get('watts', 0):.0f}W · {gpu.get('temp', 0):.0f}°C"
+    )
     tech_font = regular(17)
     tech_width = draw.textlength(tech, font=tech_font)
     draw.text(

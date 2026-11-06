@@ -3,7 +3,7 @@
 
 import argparse
 from pathlib import Path
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_transport
 import subprocess
 import time
 import json
@@ -28,7 +28,7 @@ def pull(vm, remote, destination, required=False):
                     "--partial",
                     "--protect-args",
                     "-e",
-                    "ssh -o ConnectTimeout=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=4",
+                    ssh_transport(),
                     vm + ":" + remote,
                     str(destination),
                 ],

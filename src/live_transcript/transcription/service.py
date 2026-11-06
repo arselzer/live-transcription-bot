@@ -10,10 +10,10 @@ from live_transcript.core.config import get
 
 
 def command(device):
-    cpu = device != "gpu"
+    cpu = device != "gpu" or get("asr", "primary_device") == "cpu"
     url = (
         get("asr", "small_cpu_url" if device == "cpu-small" else "cpu_url")
-        if cpu
+        if device != "gpu"
         else get("caption", "stt_url")
     )
     endpoint = urlsplit(url)
@@ -53,7 +53,11 @@ def main():
     lease = os.open(state / ("asr-" + a.device + ".lock"), os.O_RDWR | os.O_CREAT, 0o600)
     fcntl.flock(lease, fcntl.LOCK_EX | fcntl.LOCK_NB)
     os.set_inheritable(lease, True)
-    os.environ["HIP_VISIBLE_DEVICES"] = get("asr", "gpu_device") if a.device == "gpu" else ""
+    os.environ["HIP_VISIBLE_DEVICES"] = (
+        get("asr", "gpu_device")
+        if a.device == "gpu" and get("asr", "primary_device") == "gpu"
+        else ""
+    )
     argv = command(a.device)
     os.execv(argv[0], argv)
 

@@ -26,6 +26,7 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | `calendar` | Optional private ICS URL file and timezone |
 | `audio` | Dedicated PulseAudio sink name; capture reads its monitor |
 | `browser` | Google launch mode, private context, optional guest Chrome executable |
+| `services` | Installation-scoped systemd units; empty names mean external supervision |
 | `google` | Native/DOM join input and bounded admission timeout |
 
 The launcher exports only guest-relevant settings to the guest's default config
@@ -38,7 +39,7 @@ settings remain compatibility overrides where implemented. Prefer TOML for new
 deployments. Systemd units must select the same configuration as the CLI.
 
 An archive destination different from the recordings path uses a local symlink.
-The launcher validates that symlink without touching NAS storage. Background
+The launcher validates that symlink without touching archive storage. Background
 workers check the configured archive mount. An unset archive mount means ordinary
 local storage; it does not promise an independent physical backup. Quota exhaustion
 is reported and never triggers automatic deletion of unacknowledged evidence.
@@ -76,3 +77,12 @@ private name/terminology list; no implicit file from the home directory is read.
 `calendar.timezone` defaults to UTC for naive calendar entries and must name a
 valid IANA zone. `postprocess.diarization_enabled` defaults to false and uses the
 local `paths.diarization_model` when enabled. Voice clustering is experimental.
+
+
+`vm.identity_file` and `vm.known_hosts` select installation-private SSH credentials
+and pinned host trust consistently for control, recording retrieval and mirrors.
+`vm.python` selects the prepared guest's Python executable. Managed setup uses a
+dedicated virtual environment, leaving distribution Python packages untouched.
+`asr.primary_device="cpu"` gives the full primary CPU-appropriate timeouts and
+reports its engine correctly. With CPU primary, reuse that endpoint for
+`asr.cpu_url` and leave `services.cpu_large` empty to avoid duplicate full models.

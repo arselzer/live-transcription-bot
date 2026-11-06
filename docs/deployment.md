@@ -3,7 +3,57 @@
 Start with the [README walkthrough](../README.md) for installation, configuration,
 joining and stopping. This page covers the infrastructure it requires. The
 application runs on a Linux host and a prepared Linux browser VM. Hermes is
-optional. There is no automated VM provisioner yet.
+optional. `live-transcript setup` provisions this infrastructure automatically;
+the manual instructions below also support existing or remote VMs.
+
+
+## Automatic installation
+
+Run `live-transcript setup --plan`, then `sudo -v` and `live-transcript setup` as
+your normal user. Choose a new profile with global `--config FILE` when preserving
+an existing deployment. Setup owns a dedicated libvirt domain, a new private
+workspace, SSH keys and namespaced service units. It never adopts another VM or
+replaces an unrelated configuration. It needs an apt-based x86-64 Linux/KVM host;
+Ubuntu is the validated managed guest distribution.
+
+Defaults are a 4 GiB / 2 vCPU browser VM with a sparse 64 GiB disk. `--memory-mib`,
+`--vcpus`, `--disk-gib`, `--vm-storage`, `--vm-name`, `--network` and `--workspace`
+select deployment resources. Keep VM disks and active journals on local storage.
+The standard libvirt NAT/DHCP network is reused without restarting it; the guest
+gets a MAC reservation so its private SSH address remains stable.
+
+The Ubuntu image, whisper.cpp revision, model revisions and model/image SHA-256
+checksums are pinned in the installer. Python browser dependencies use a dedicated
+guest virtual environment. OS packages are updated from the distribution's
+repositories; this is not a bit-for-bit frozen operating-system image.
+
+Private setup state and `installation.log` are in the selected workspace. Rerun
+the same command to resume. Verified downloads are reused. Failed guest dependency
+setup can be retried with the operator-only administrative key, while holding the
+VM's idle lease; a live meeting prevents repair. No guest disk or evidence is
+deleted on failure. Setup never silently overwrites user-edited managed profiles.
+
+`--recording-only` skips speech models and services. This is useful for validating
+recording infrastructure; it deliberately provides no live transcription. The
+ordinary doctor also checks speech dependencies, so its speech checks will fail
+in that diagnostic mode. `--no-start-services` prepares full installation without
+launching speech engines. Setup validates audio with a generated tone and reads
+frames from the actual caption-camera device, without joining any provider.
+
+The default speech backend is CPU, with large-v3 for accuracy and a small model
+for backlog/failure recovery. `--backend cuda` or `--backend hip` selects a GPU
+build using an already installed compatible toolchain. It does not replace GPU
+drivers. Optional faster-whisper final fallback weights and Piper voices are
+separate optional assets; the full native CPU path works without them.
+
+For CPU containers choose `--speech-supervisor compose`. Setup generates a
+private `compose/compose.json`, builds the pinned speech image, and starts only
+its own project. The primary and small CPU server use read-only model mounts,
+loopback-only published ports, non-root processes, no added capabilities, resource
+limits and health checks. The browser remains in the VM. The setup state records
+the exact Compose command for inspecting/stopping the project. Compose does not
+restart a merely unhealthy process automatically; the speech router still handles
+failed endpoints and retains queued audio. Read [deployment architecture](deployment-architecture.md).
 
 ## Host and models
 
@@ -159,7 +209,7 @@ repeatedly retry a rejected Google admission.
 
 `paths.root` is the data workspace, independent of the source installation.
 Configure recordings, local safety copies, and optionally an archive destination
-and required archive mount. A slow or unavailable NAS must not gate joining or
+and required archive mount. A slow or unavailable archive destination must not gate joining or
 independent guest capture. Keep enough guest space for a whole meeting if copying
 stalls. Quota/reserve failures are reported; they do not delete previous evidence.
 

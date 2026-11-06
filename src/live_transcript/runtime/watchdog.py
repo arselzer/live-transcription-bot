@@ -22,7 +22,7 @@ import time
 from live_transcript.core.options import rejoin_options
 from live_transcript.capture.guard import atomic_json
 from live_transcript.runtime.state import update
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options
 
 VM = get("vm", "ssh")
 STATE = Path(get("paths", "logs")) / "watchdog-state.json"
@@ -34,6 +34,7 @@ def probe(token):
     result = subprocess.run(
         [
             "ssh",
+            *ssh_options(),
             "-o",
             "ConnectTimeout=5",
             "-o",
@@ -125,12 +126,14 @@ def recovery_options(meeting, now):
 def ensure_backend():
     from urllib.parse import urlsplit
 
-    endpoints = [(get("caption", "stt_url"), "whisper-stt.service")]
+    endpoints = [(get("caption", "stt_url"), get("services", "primary"))]
     if get("asr", "cpu_fallback"):
-        endpoints.append((get("asr", "cpu_url"), "whisper-stt-cpu.service"))
+        endpoints.append((get("asr", "cpu_url"), get("services", "cpu_large")))
         if get("asr", "adaptive_model"):
-            endpoints.append((get("asr", "small_cpu_url"), "whisper-stt-cpu-small.service"))
+            endpoints.append((get("asr", "small_cpu_url"), get("services", "cpu_small")))
     for url, unit in endpoints:
+        if not unit:
+            continue  # an external supervisor owns this endpoint
         endpoint = urlsplit(url)
         try:
             with socket.create_connection((endpoint.hostname, endpoint.port or 80), timeout=2):
@@ -175,6 +178,7 @@ def rejoin(meeting, state, now):
     stopped = subprocess.run(
         [
             "ssh",
+            *ssh_options(),
             "-o",
             "ConnectTimeout=5",
             VM,

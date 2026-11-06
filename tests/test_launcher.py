@@ -10,6 +10,33 @@ import unittest
 
 
 class LauncherTests(unittest.TestCase):
+    def test_managed_credentials_and_custom_guest_python_survive_all_launch_transports(self):
+        key = str(self.root / "private ssh key")
+        trust = str(self.root / "pinned known hosts")
+        with self.config.open("a") as stream:
+            stream.write(
+                "identity_file="
+                + json.dumps(key)
+                + "\nknown_hosts="
+                + json.dumps(trust)
+                + '\npython="/opt/browser-venv/bin/python"\n'
+                + '[services]\ncaptions="managed-caption.service"\n'
+            )
+        result = self.run_launcher()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
+        transfers = [call for call in calls if call[0] in ("ssh", "scp")]
+        self.assertTrue(transfers)
+        for call in transfers:
+            self.assertIn(key, call)
+            self.assertIn("UserKnownHostsFile=" + trust, call)
+            self.assertIn("StrictHostKeyChecking=yes", call)
+            self.assertNotIn("StrictHostKeyChecking=accept-new", call)
+        self.assertTrue(any("/opt/browser-venv/bin/python" in call[-1] for call in transfers))
+        self.assertIn(
+            ["systemctl", "--user", "is-active", "--quiet", "managed-caption.service"], calls
+        )
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="lt path with spaces ")
         self.addCleanup(self.tmp.cleanup)

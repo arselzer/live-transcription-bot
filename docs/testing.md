@@ -127,3 +127,25 @@ Wheel builds use a fresh snapshot of reviewed source. A previous setuptools
 `build/lib` directory must not contribute deleted modules. Release verification
 compares wheel member names and bytes with the reviewed package, in addition to
 building from the source archive and scanning artifact contents for private data.
+
+## Managed-install validation
+
+`install.sh --plan` and `live-transcript setup --plan` must work before a profile
+exists, without changing the host. Offline regressions cover profile/domain/disk
+ownership, modified profiles/units, invalid state, download checksums and symlinks,
+private SSH transport, CPU-primary routing, and externally supervised services.
+
+The November 6 deployment review exercised a newly created Ubuntu VM through
+kernel/browser installation, reboot, real microphone/sink capture, virtual camera
+frames and retrieval. It also resumed an interrupted bootstrap, repeated full
+setup, built the pinned native speech binaries and verified all model hashes.
+An isolated full CPU installation passed doctor and transcribed the pinned
+whisper.cpp speech sample; this is not a provider admission or accuracy benchmark.
+The sample took about 15 seconds for 11 seconds of input on that test host, so
+CPU-only live throughput must be measured rather than assumed.
+
+The optional speech image was built and its non-root/read-only runtime exercised.
+Compose configuration, model mounts and endpoint readiness are separate checks
+from browser isolation. No browser runs in a container. Existing installations
+and live meeting services must not be stopped to run these drills; each test owns
+its profile, VM, service names and ports.

@@ -16,7 +16,7 @@ import time
 import hashlib
 import shutil
 from live_transcript.capture.guard import atomic_json, verify_inventory
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_transport
 
 
 def finalized(root):
@@ -75,7 +75,7 @@ def mirror(vm, remote, destination, evidence_only=False):
         ]
     cmd += [
         "-e",
-        "ssh -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=3",
+        ssh_transport(),
         vm + ":" + remote.rstrip("/") + "/",
         str(destination) + "/",
     ]
@@ -88,7 +88,7 @@ def capacity_available(used, free, max_bytes, min_free):
 
 
 def safety_copy(vm, remote, primary, directory, max_bytes=None, min_free=None):
-    """A second filesystem protects critical evidence if NFS storage fails.
+    """A second filesystem protects critical evidence if archive storage fails.
 
     No automatic deletion. Keep a 1 GB transfer margin and a root-disk reserve.
     Video segments stay on primary; audio, snapshots and metadata get both copies.
@@ -100,16 +100,16 @@ def safety_copy(vm, remote, primary, directory, max_bytes=None, min_free=None):
     out = directory / Path(remote).name
     out.mkdir(exist_ok=True, mode=0o700)
     result = dict(utc=time.time(), status="pending", directory=str(out), screen_video_copied=False)
-    # Never stat the hard-mounted NAS from the local safety-copy worker: a
-    # storage outage must not block the independent copy on NVMe.
-    known_nas = (
+    # Never stat the configured archive mount from the local safety-copy worker: a
+    # storage outage must not block the independent copy on local storage.
+    mounted_archive = (
         str(primary).startswith(get("paths", "recordings").rstrip("/") + "/")
         and bool(get("paths", "archive_mount"))
     ) or (
         bool(get("paths", "archive_mount"))
         and str(primary).startswith(get("paths", "archive_mount").rstrip("/") + "/")
     )
-    primary_path = Path(primary) if not known_nas else None
+    primary_path = Path(primary) if not mounted_archive else None
     same = (
         primary_path is not None
         and directory.stat().st_dev
@@ -141,7 +141,7 @@ def safety_copy(vm, remote, primary, directory, max_bytes=None, min_free=None):
                             "--partial",
                             "--protect-args",
                             "-e",
-                            "ssh -o ConnectTimeout=5 -o ServerAliveInterval=10 -o ServerAliveCountMax=3",
+                            ssh_transport(),
                             vm + ":" + wav,
                             str(target),
                         ],
@@ -163,7 +163,7 @@ def safety_copy(vm, remote, primary, directory, max_bytes=None, min_free=None):
     return result
 
 
-def run(vm, log, destination, max_seconds=9 * 3600, secondary=None, lane="nas"):
+def run(vm, log, destination, max_seconds=9 * 3600, secondary=None, lane="archive"):
     secondary = secondary or get("paths", "safety_copies")
     deadline = time.monotonic() + max_seconds
     while time.monotonic() < deadline:
@@ -217,7 +217,7 @@ def main():
     ap.add_argument("--destination", default=get("paths", "recordings"))
     ap.add_argument("--max-seconds", type=float, default=9 * 3600)
     ap.add_argument("--secondary-root", default=get("paths", "safety_copies"))
-    ap.add_argument("--lane", choices=("nas", "local"), default="nas")
+    ap.add_argument("--lane", choices=("archive", "local", "nas"), default="archive")
     a = ap.parse_args()
     run(a.vm, a.join_log, a.destination, a.max_seconds, a.secondary_root, a.lane)
 

@@ -13,7 +13,7 @@ import threading
 import time
 
 from live_transcript.transcription.store import CaptionStore
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options, ssh_transport
 from live_transcript.worker import guest_command
 from tools.benchmark_audio_conditions import transform
 from live_transcript.capture.guard import atomic_json
@@ -41,7 +41,9 @@ def main():
     ).read_text()
     session = Path(re.findall(r"RECORDING to (\S+)", log)[-1]).stem
     started = float(
-        subprocess.check_output(["ssh", get("vm", "ssh"), "cat /tmp/cap_session_start"], text=True)
+        subprocess.check_output(
+            ["ssh", *ssh_options(), get("vm", "ssh"), "cat /tmp/cap_session_start"], text=True
+        )
     )
     root = Path(a.root)
     out = root / time.strftime("multi-%Y%m%d-%H%M%S")
@@ -123,10 +125,14 @@ def main():
                     else:
                         target_file.write_bytes((root / phrase["file"]).read_bytes())
             remote = get("vm", "home") + "/" + out.name + "-" + language
-            subprocess.run(["ssh", get("vm", "ssh"), "mkdir -p " + shlex.quote(remote)], check=True)
+            subprocess.run(
+                ["ssh", *ssh_options(), get("vm", "ssh"), "mkdir -p " + shlex.quote(remote)],
+                check=True,
+            )
             subprocess.run(
                 [
                     "scp",
+                    *ssh_options(),
                     "-q",
                     *[str(p) for p in directory.iterdir()],
                     get("vm", "ssh") + ":" + remote + "/",
@@ -158,7 +164,9 @@ def main():
             )
             fh = open(directory / "sender.log", "wb")
             proc = subprocess.Popen(
-                ["ssh", get("vm", "ssh"), command], stdout=fh, stderr=subprocess.STDOUT
+                ["ssh", *ssh_options(), get("vm", "ssh"), command],
+                stdout=fh,
+                stderr=subprocess.STDOUT,
             )
             processes.append((language, name, remote, proc, fh))
         print(
@@ -176,7 +184,7 @@ def main():
                     "--include=admission.jpg",
                     "--exclude=*",
                     "-e",
-                    "ssh -o ConnectTimeout=5",
+                    ssh_transport(),
                     get("vm", "ssh") + ":" + remote + "/",
                     str(out / language) + "/",
                 ],
@@ -190,6 +198,7 @@ def main():
             subprocess.run(
                 [
                     "scp",
+                    *ssh_options(),
                     "-q",
                     get("vm", "ssh") + ":" + remote + "/spoken.jsonl",
                     str(out / language / "spoken.jsonl"),

@@ -4,7 +4,7 @@
 import argparse
 import json
 from pathlib import Path
-from live_transcript.core.config import get
+from live_transcript.core.config import get, ssh_options
 import re
 import shlex
 import subprocess
@@ -53,12 +53,13 @@ p.mkdir(exist_ok=True)
     subprocess.run(
         [
             "ssh",
+            *ssh_options(),
             "-o",
             "ConnectTimeout=5",
             "-o",
             "ServerAliveInterval=5",
             get("vm", "ssh"),
-            "python3 -c " + shlex.quote(code),
+            shlex.join([get("vm", "python"), "-c", code]),
         ],
         input=json.dumps(request),
         text=True,
