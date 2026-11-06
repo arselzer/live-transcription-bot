@@ -64,6 +64,13 @@ Shorter repair chunks reset decoder context, retaining the full original model.
 The example places it outside the checkout. `paths.cpu_model` selects the
 optional faster-whisper CPU postprocessing model directory.
 
+`paths.postprocess_python` selects the interpreter for background postprocessing;
+it must have the required ML dependencies. Source-checkout runs expose only the
+checkout's `src` directory to that interpreter. For installed-wheel deployments, install the same bot
+package version in the selected interpreter too; the application does not share
+one interpreter's entire `site-packages` directory with another.
+The foreground `live-transcript process` command uses the CLI's interpreter.
+
 `paths.glossary` is optional and disabled by default. Set it explicitly to use a
 private name/terminology list; no implicit file from the home directory is read.
 `calendar.timezone` defaults to UTC for naive calendar entries and must name a

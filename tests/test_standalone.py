@@ -183,8 +183,12 @@ class RecoveryCheckpointTests(unittest.TestCase):
         )
 
     def test_postprocess_restart_resumes_without_downloading_again(self):
+        environment = {"FIXTURE_WORKER": "external-interpreter"}
         with (
             patch.object(recovery_worker, "get", side_effect=self.get),
+            patch.object(
+                recovery_worker, "worker_command_env", return_value=environment
+            ) as command_env,
             patch.object(
                 recovery_worker.subprocess, "run", return_value=MagicMock(returncode=0)
             ) as run,
@@ -193,6 +197,8 @@ class RecoveryCheckpointTests(unittest.TestCase):
         self.assertEqual(result["status"], "complete")
         self.assertEqual(run.call_count, 1)
         self.assertIn("process", run.call_args.args[0])
+        command_env.assert_called_once_with(str(self.root))
+        self.assertIs(run.call_args.kwargs["env"], environment)
 
     def test_postprocess_oserror_is_bounded_and_preserves_recording(self):
         with (

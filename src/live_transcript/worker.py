@@ -53,19 +53,15 @@ def command(role, *arguments, python=None):
 
 
 def command_env(python=None):
-    """Env so an external interpreter (e.g. postprocess_python) can import us.
-
-    Interpreters chosen for their ML dependencies do not have the package
-    installed; point PYTHONPATH at this checkout's src layout instead.
-    """
-    if not python:
+    """Expose checkout source to an ML interpreter without sharing site-packages."""
+    if not python or os.environ.get("LIVE_TRANSCRIPT_BUNDLE"):
         return None
     src = Path(__file__).resolve().parent.parent
-    if not (src / "live_transcript" / "worker.py").exists():
+    if src.name != "src" or not (src.parent / "PUBLIC_SOURCE_FILES.txt").is_file():
         return None  # installed build: the interpreter must provide the package
     env = dict(os.environ)
     existing = env.get("PYTHONPATH")
-    env["PYTHONPATH"] = str(src) + (":" + existing if existing else "")
+    env["PYTHONPATH"] = str(src) + (os.pathsep + existing if existing else "")
     return env
 
 

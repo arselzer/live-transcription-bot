@@ -125,6 +125,49 @@ class PackageTests(unittest.TestCase):
 
 
 class WorkerTests(unittest.TestCase):
+    def test_external_interpreter_can_run_checkout_without_installing_package(self):
+        import venv
+        from live_transcript.worker import command, command_env
+
+        with tempfile.TemporaryDirectory(prefix="external python ") as directory:
+            root = Path(directory)
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(root / "venv")
+            python = str(root / "venv/bin/python")
+            env = {
+                k: v
+                for k, v in os.environ.items()
+                if k not in ("PYTHONPATH", "LIVE_TRANSCRIPT_BUNDLE")
+            }
+            invocation = command("config", python=python)
+            missing = subprocess.run(
+                invocation, cwd=root, env=env, capture_output=True, text=True, timeout=15
+            )
+            self.assertNotEqual(missing.returncode, 0)
+            with patch.dict(os.environ, env, clear=True):
+                ready = subprocess.run(
+                    invocation,
+                    cwd=root,
+                    env=command_env(python),
+                    capture_output=True,
+                    text=True,
+                    timeout=15,
+                )
+            self.assertEqual(ready.returncode, 0, ready.stderr)
+            self.assertEqual(json.loads(ready.stdout)["google"]["input_mode"], "native")
+
+    def test_external_interpreter_never_inherits_foreign_site_packages(self):
+        import live_transcript.worker as worker
+
+        with tempfile.TemporaryDirectory() as directory:
+            installed = Path(directory) / "site-packages/live_transcript/worker.py"
+            installed.parent.mkdir(parents=True)
+            installed.write_text("# installed fixture\n")
+            with patch.object(worker, "__file__", str(installed)):
+                self.assertIsNone(worker.command_env("other-python"))
+        self.assertIsNone(worker.command_env())
+        with patch.dict(os.environ, LIVE_TRANSCRIPT_BUNDLE="/guest/live-transcript.pyz"):
+            self.assertIsNone(worker.command_env("other-python"))
+
     def test_children_stay_in_the_same_guest_bundle(self):
         from live_transcript.worker import command
 
