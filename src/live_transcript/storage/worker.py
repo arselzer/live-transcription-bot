@@ -11,7 +11,7 @@ import sys
 import time
 from live_transcript.capture.guard import atomic_json
 from live_transcript.core.config import get
-from live_transcript.worker import command as worker_command
+from live_transcript.worker import command as worker_command, command_env as worker_command_env
 
 
 def recover_once(vm, wav, token, directory=None, do_postprocess=True):
@@ -76,6 +76,7 @@ def recover_once(vm, wav, token, directory=None, do_postprocess=True):
         try:
             result = subprocess.run(
                 worker_command("process", destination, python=get("paths", "postprocess_python")),
+                env=worker_command_env(get("paths", "postprocess_python")),
                 capture_output=True,
                 text=True,
                 timeout=7200,

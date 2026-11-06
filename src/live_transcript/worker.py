@@ -52,6 +52,23 @@ def command(role, *arguments, python=None):
     return [*prefix, role, *map(str, arguments)]
 
 
+def command_env(python=None):
+    """Env so an external interpreter (e.g. postprocess_python) can import us.
+
+    Interpreters chosen for their ML dependencies do not have the package
+    installed; point PYTHONPATH at this checkout's src layout instead.
+    """
+    if not python:
+        return None
+    src = Path(__file__).resolve().parent.parent
+    if not (src / "live_transcript" / "worker.py").exists():
+        return None  # installed build: the interpreter must provide the package
+    env = dict(os.environ)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = str(src) + (":" + existing if existing else "")
+    return env
+
+
 def guest_command(role, *arguments, test=False):
     """Build an SSH-side command without assuming a Python installation path."""
     from live_transcript.core.config import get
