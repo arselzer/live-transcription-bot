@@ -2,10 +2,10 @@
 
 ## Regression suite
 
-Run `.venv/bin/python tools/run_tests.py` after installing the editable checkout.
+Run `.venv/bin/python -m tools.run_tests` after installing the editable checkout.
 The runner supplies isolated configuration and temporary runtime paths. Tests cover durable acknowledgments, replay, speaker timing, language
 routing, caption correction, archive hashing/reconstruction, lifecycle leases,
-launcher quoting, guest package bootstrapping, source privacy/index checks,
+launcher quoting, guest bundle execution, source privacy/index checks,
 recovery checkpoints, configuration validation and recovery
 policy boundaries. Unit tests do not prove a live provider join.
 
@@ -17,15 +17,23 @@ references to measure accuracy rather than treating a passing gate as WER.
 
 ## Isolated integration drills
 
+Run development tools from the checkout as `python -m tools.TOOL_NAME` (omit
+`.py`). Tools that use a VM or live services require an explicitly selected
+private test profile. Real-room helpers can join participants; GPU fault drills
+can stop services, so do not run them during another meeting. They deploy a
+separate `live-transcript-test.pyz`; the normal guest bundle excludes fixtures.
+
 `smoke_caption_runtime.py` checks durable streaming/restart/lost-ACK behavior with
 an isolated backend. Its synthetic latency is not real speech recognition latency.
 `smoke_session_lifecycle.py` uses detached guest services to test SSH loss,
 reconnection and ownership. `smoke_clean_stop.py` checks finite valid WAV headers
 and archive finalization after a graceful owner stop.
 
-`smoke_recording_guard.py --provider zoom|proton` runs inside the guest against
+`smoke_recording_guard.py --provider zoom|proton|google` runs inside the guest against
 locally fulfilled pages and a private audio sink. It kills uploader/capture/guard
-components while checking that evidence survives. It does not join a real room.
+components while checking that evidence survives. It does not join a real room. Deliberately killed writers can leave partial
+containers: the drill retains and reports them, and requires playable outputs
+from surviving/restarted capture. Checksums alone do not prove decodability.
 
 `smoke_asr_failover.py` performs actual inference while injecting primary backend
 failure into an isolated router. It checks full CPU decoding, backlog-triggered

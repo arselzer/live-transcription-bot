@@ -111,8 +111,8 @@ terminal. See [Zoom admission](zoom-admission.md).
 ## Derived-artifact failures
 
 Text, subtitle and video outputs use private temporary files and atomic
-replacement. A failed encode leaves the previous file in place. A missing model
-or failed video produces explicit `complete_with_warnings` status; an unexpected
+replacement. A failed encode leaves the previous file in place. A missing model, failed video,
+or unavailable optional notes vault produces explicit `complete_with_warnings` status; an unexpected
 stage error produces `processing_failed`. These statuses are visible to the
 existing watchdog. Storage failures while publishing recognition caches do not
 start a second CPU recognition pass. Original media is never removed.

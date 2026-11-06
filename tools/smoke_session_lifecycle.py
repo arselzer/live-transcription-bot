@@ -2,8 +2,11 @@
 """Verify real VM ownership and SSH reconnection without opening any meeting."""
 
 import json
+import shlex
 from pathlib import Path
 from live_transcript.core.config import get
+from live_transcript.worker import guest_command
+from tools.run_tts_e2e import deploy_test_bundle
 
 guest_home = get("vm", "home")
 import subprocess
@@ -24,14 +27,15 @@ def ssh(command, check=True, timeout=10):
 
 
 def main():
+    deploy_test_bundle()
     Path(get("paths", "logs")).mkdir(parents=True, exist_ok=True)
-    ssh(f"python3 {guest_home}/meeting_session.py --assert-idle")
+    ssh(shlex.join(guest_command("session", "--assert-idle", test=True)))
     token = "lifecycle-" + uuid.uuid4().hex[:12]
     unit = "live-transcript-meeting-" + token
     command = (
         "export XDG_RUNTIME_DIR=/run/user/$(id -u) PULSE_SERVER=unix:/run/user/$(id -u)/pulse/native "
-        f"LT_RUN_ID={token} LT_MEETING_PROGRAM={guest_home}/session_lifecycle_fixture.py; "
-        f"exec python3 -u {guest_home}/meeting_session.py"
+        f"LT_RUN_ID={token} LT_TEST_ROLE=fixture-session; "
+        "exec " + shlex.join(guest_command("session", test=True))
     )
     follower = subprocess.Popen(
         ["ssh", "-o", "ConnectTimeout=5", VM, command],
@@ -48,7 +52,7 @@ def main():
         else:
             raise TimeoutError("fixture worker did not start")
         before = ssh("systemctl --user show " + unit + " -p MainPID --value").stdout.strip()
-        denied = ssh(f"python3 {guest_home}/meeting_session.py --assert-idle", check=False)
+        denied = ssh(shlex.join(guest_command("session", "--assert-idle", test=True)), check=False)
         assert denied.returncode != 0, "active VM lease did not block preparation"
         mismatch = ssh(command + " different-invocation", check=False)
         assert mismatch.returncode != 0, "same token accepted a different invocation"
@@ -59,7 +63,7 @@ def main():
         resumed = ssh(command, timeout=30)
         assert "SESSION FIXTURE COMPLETE" in resumed.stdout
         remote = json.loads(
-            ssh(f"python3 {guest_home}/meeting_session.py --status " + token).stdout
+            ssh(shlex.join(guest_command("session", "--status", test=True)) + " " + token).stdout
         )
         assert remote["phase"] == "finished", remote
         report = dict(
@@ -79,7 +83,11 @@ def main():
             follower.wait(timeout=5)
         follower.stdout.close()
         follower.stderr.close()
-        ssh(f"python3 {guest_home}/meeting_session.py --stop " + token, check=False, timeout=135)
+        ssh(
+            shlex.join(guest_command("session", "--stop", test=True)) + " " + token,
+            check=False,
+            timeout=135,
+        )
 
 
 if __name__ == "__main__":

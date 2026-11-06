@@ -8,6 +8,8 @@ See components/PreJoinDetails, ParticipantControls, and ParticipantsLayout.
 Archival capture is independent of live captions and keeps source evidence.
 """
 
+from live_transcript.worker import command as worker_command
+
 import argparse
 import json
 import os
@@ -293,14 +295,12 @@ def run(argv=None):
                     # Pre-arm only the camera writer, not audio capture, before Chrome
                     # enumerates V4L2. The renderer must win the device format race.
                     Path("/tmp/cap_session_start").write_text(str(int(time.time())))
-                    renderer = children.start(
-                        ["python3", str(VM_HOME / "caption_render.py")], "/tmp/proton-render.log"
-                    )
+                    renderer = children.start(worker_command("render"), "/tmp/proton-render.log")
                     time.sleep(3)
                 ctx = p.chromium.launch_persistent_context(
                     str(VM_HOME / "chrome-proton-prof"),
                     headless=False,
-                    env=dict(os.environ, PULSE_SINK="scribe"),
+                    env=dict(os.environ, PULSE_SINK=get("audio", "sink")),
                     ignore_default_args=["--mute-audio"],
                     locale="en-US",
                     args=[
@@ -344,7 +344,7 @@ def run(argv=None):
                         "-f",
                         "pulse",
                         "-i",
-                        "scribe.monitor",
+                        get("audio", "sink") + ".monitor",
                         "-ac",
                         "1",
                         "-ar",
@@ -369,7 +369,7 @@ def run(argv=None):
                     )
                 )
                 streamer = children.start(
-                    ["python3", str(VM_HOME / "caption_stream.py"), out.stem, "--no-video"],
+                    worker_command("stream", out.stem, "--no-video"),
                     "/tmp/capstream.log",
                 )
                 children.start(
@@ -454,7 +454,7 @@ def run(argv=None):
                                 "-f",
                                 "pulse",
                                 "-i",
-                                "scribe.monitor",
+                                get("audio", "sink") + ".monitor",
                                 "-ac",
                                 "1",
                                 "-ar",
@@ -475,7 +475,7 @@ def run(argv=None):
                         click_if_visible(pg, "Turn off camera")
                         children.stop(renderer)
                         renderer = children.start(
-                            ["python3", str(VM_HOME / "caption_render.py")],
+                            worker_command("render"),
                             "/tmp/proton-render.log",
                         )
                         renderer_started = now
@@ -487,7 +487,7 @@ def run(argv=None):
                         )
                         children.stop(streamer)
                         streamer = children.start(
-                            ["python3", str(VM_HOME / "caption_stream.py"), out.stem, "--no-video"],
+                            worker_command("stream", out.stem, "--no-video"),
                             "/tmp/capstream.log",
                         )
                         next_streamer_attempt = now + 10

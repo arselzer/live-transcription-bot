@@ -14,9 +14,10 @@ import time
 
 from live_transcript.transcription.store import CaptionStore
 from live_transcript.core.config import get
+from live_transcript.worker import guest_command
 from tools.benchmark_audio_conditions import transform
 from live_transcript.capture.guard import atomic_json
-from tools.run_tts_e2e import errors
+from tools.run_tts_e2e import errors, deploy_test_bundle
 
 
 def main():
@@ -29,10 +30,15 @@ def main():
     )
     ap.add_argument("--audio-stress", action="store_true")
     a = ap.parse_args()
+    deploy_test_bundle()
     current = json.loads((Path(get("paths", "logs")) / "current_meeting.json").read_text())
     if current.get("status") != "active":
         raise RuntimeError("Receiver must be in an authorized live test room")
-    log = Path(current.get("control_log", f"/tmp/scribe_join.{current['pid']}.log")).read_text()
+    log = Path(
+        current.get(
+            "control_log", str(Path(get("paths", "logs")) / ("join-" + current["run_id"] + ".log"))
+        )
+    ).read_text()
     session = Path(re.findall(r"RECORDING to (\S+)", log)[-1]).stem
     started = float(
         subprocess.check_output(["ssh", get("vm", "ssh"), "cat /tmp/cap_session_start"], text=True)
@@ -133,9 +139,7 @@ def main():
                 "-a",
                 "-s",
                 "-screen 0 1280x800x24",
-                "python3",
-                "-u",
-                get("vm", "home") + "/tts_test_bot.py",
+                *guest_command("test-sender", test=True),
                 current["url"],
                 "--directory",
                 remote,

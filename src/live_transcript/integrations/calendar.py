@@ -31,7 +31,6 @@ from live_transcript.core.config import get
 URL_FILE = get("calendar", "url_file")
 STATE = str(Path(get("paths", "logs")) / "calendar-state.json")
 MJSON = str(Path(get("paths", "logs")) / "current_meeting.json")
-SCRIBE = str(Path(get("paths", "root")) / "scribe_run.sh")
 LEAD = 120  # join 2 minutes before the official start
 LATE_GRACE = 600  # still ok to join up to 10 min after start (boot/VPN hiccups)
 REMINDER = 90  # if the event carries VALARM TRIGGER, honor it, floor 90s

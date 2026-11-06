@@ -12,7 +12,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from live_transcript.core.config import get
 
-D = os.environ.get("SCRIBE_DIR", get("vm", "home"))
+D = os.environ.get("LIVE_TRANSCRIPT_HOME", get("vm", "home"))
 try:
     _layout = json.loads(Path(D, "display.json").read_text()).get("layout", "standard")
 except (OSError, ValueError):

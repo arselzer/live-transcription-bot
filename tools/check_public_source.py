@@ -171,7 +171,9 @@ def _additional_files(root, allowed):
         for name in _git(root, "ls-files", "-z").stdout.split(b"\0"):
             if name:
                 decoded = name.decode("utf-8")
-                if decoded not in allowed:
+                if decoded not in allowed and (
+                    (root / decoded).exists() or (root / decoded).is_symlink()
+                ):
                     found.add(decoded)
     return sorted(found)
 

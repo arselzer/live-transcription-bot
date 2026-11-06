@@ -7,13 +7,13 @@ types fail early. Use `live-transcript --json config` to inspect effective value
 Do not put meeting passwords in this file. Runtime session arguments are private.
 
 [config.example.toml](../config.example.toml) lists supported deployment settings.
-Defaults live in one place: `runtime_config.DEFAULTS`. Setting `paths.root` also
-derives state, logs, recordings, safety copies and model paths unless explicitly set.
+Defaults live in one place: `live_transcript.core.config.DEFAULTS`. Setting `paths.root` also
+derives state, logs, recordings, safety copies, TTS assets and model paths unless explicitly set.
 Explicit paths expand `~` and environment variables. Use absolute guest paths.
 
 | Section | Purpose |
 | --- | --- |
-| `paths` | Source checkout, runtime directories, local model/VAD/binary, optional vault, archive destination/mount |
+| `paths` | Data workspace, runtime directories, local model/VAD/binary, optional vault, archive destination/mount |
 | `vm` | SSH destination, libvirt name, IP, guest home, whether automatic libvirt start is allowed |
 | `caption` | Trusted interface/port, speech endpoint, cadence, silence threshold and finalization delay |
 | `asr` | CPU fallback/adaptation, endpoint timeouts, backlog/throughput thresholds, GPU/CPU device settings |
@@ -23,14 +23,16 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | `storage` | Local safety quota and host free-space reserve |
 | `identity` | Transparent default participant name; command-line `--name` overrides it |
 | `admission` | Test join limits; optional bounded Zoom name fallbacks and retry delay |
-| `calendar` | Optional private ICS URL file |
+| `calendar` | Optional private ICS URL file and timezone |
+| `audio` | Dedicated PulseAudio sink name; capture reads its monitor |
+| `browser` | Google launch mode, private context, optional guest Chrome executable |
 
 The launcher exports only guest-relevant settings to the guest's default config
-location. Host paths, vault and calendar settings are excluded. Both host and
-guest need `runtime_config.py`; the launcher deploys it with the adapters.
+location. Host paths, vault and calendar settings are excluded. The launcher deploys the
+guest configuration separately from its application bundle.
 
 Existing `CAPTION_HOST`, `CAPTION_PORT`, `CAPTION_BIND`, `CAPTION_STT_URL`,
-`CAPTION_DB`, `CAPTION_CAP_FILE`, `SCRIBE_DIR` and `COMMIT_ONCE` environment
+`CAPTION_DB`, `CAPTION_CAP_FILE`, `LIVE_TRANSCRIPT_HOME` and `COMMIT_ONCE` environment
 settings remain compatibility overrides where implemented. Prefer TOML for new
 deployments. Systemd units must select the same configuration as the CLI.
 
@@ -41,9 +43,8 @@ local storage; it does not promise an independent physical backup. Quota exhaust
 is reported and never triggers automatic deletion of unacknowledged evidence.
 
 Protocol sample rate/PCM width, archival format and camera geometry remain
-implementation contracts rather than arbitrary tuning knobs. Some legacy helper
-scripts and benchmark entry points still contain installation-specific defaults;
-use the standalone CLI and maintained launch/recovery paths for supported operation.
+implementation contracts rather than arbitrary tuning knobs. Development benchmarks remain explicit tools; use the public CLI for normal
+operation. See [deployment](deployment.md) for external dependency and service setup.
 
 `asr.gpu_device` is the HIP device index. `asr.metrics_device` is the separate
 rocm-smi card key; the two numbering schemes can differ. Configure both explicitly

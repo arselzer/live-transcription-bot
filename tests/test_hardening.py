@@ -310,20 +310,31 @@ class HardeningTests(unittest.TestCase):
 
     def test_failed_primary_with_empty_fallback_reports_stt_failed_not_silence(self):
         import types
+
         path = self.root / "recording.wav"
         with wave.open(str(path), "wb") as audio:
-            audio.setnchannels(1); audio.setsampwidth(2); audio.setframerate(16000)
+            audio.setnchannels(1)
+            audio.setsampwidth(2)
+            audio.setframerate(16000)
             audio.writeframes(b"\0\0" * 80000)
-        transcript = path.with_suffix(".txt"); transcript.write_text("Verified transcript.")
+        transcript = path.with_suffix(".txt")
+        transcript.write_text("Verified transcript.")
         result = MagicMock(stdout="Backend changed its output format", stderr="", returncode=0)
         fw = types.ModuleType("faster_whisper")
+
         class _Model:
-            def __init__(self, *a, **k): pass
-            def transcribe(self, *a, **k): return iter([]), MagicMock(language="und")
+            def __init__(self, *a, **k):
+                pass
+
+            def transcribe(self, *a, **k):
+                return iter([]), MagicMock(language="und")
+
         fw.WhisperModel = _Model
-        with patch.object(sys, "argv", ["postprocess.py", str(path)]), \
-             patch("subprocess.run", return_value=result), \
-             patch.dict(sys.modules, {"faster_whisper": fw}):
+        with (
+            patch.object(sys, "argv", ["postprocess.py", str(path)]),
+            patch("subprocess.run", return_value=result),
+            patch.dict(sys.modules, {"faster_whisper": fw}),
+        ):
             with self.assertRaises(SystemExit):
                 runpy.run_module("live_transcript.runtime.postprocess", run_name="__main__")
         status = json.loads(path.with_suffix(".postprocess-status.json").read_text())
@@ -332,30 +343,45 @@ class HardeningTests(unittest.TestCase):
         self.assertEqual(transcript.read_text(), "Verified transcript.")
 
     def test_successful_silence_reports_prior_retained_not_failure(self):
-        path = self.root / "recording.wav"; path.touch()
-        transcript = path.with_suffix(".txt"); transcript.write_text("Verified transcript.")
+        path = self.root / "recording.wav"
+        path.touch()
+        transcript = path.with_suffix(".txt")
+        transcript.write_text("Verified transcript.")
         from live_transcript.transcription import batch as batch_module
-        with patch.object(sys, "argv", ["postprocess.py", str(path)]), \
-             patch.object(batch_module, "transcribe_wav",
-                          return_value=([], {"chunks": 1, "retries": [], "languages": []})):
+
+        with (
+            patch.object(sys, "argv", ["postprocess.py", str(path)]),
+            patch.object(
+                batch_module,
+                "transcribe_wav",
+                return_value=([], {"chunks": 1, "retries": [], "languages": []}),
+            ),
+        ):
             with self.assertRaises(SystemExit):
                 runpy.run_module("live_transcript.runtime.postprocess", run_name="__main__")
         self.assertEqual(
             json.loads(path.with_suffix(".postprocess-status.json").read_text())["status"],
-            "stt_empty_prior_retained")
+            "stt_empty_prior_retained",
+        )
         self.assertEqual(transcript.read_text(), "Verified transcript.")
 
     def test_silence_led_detection_window_uses_voiced_speech_only(self):
         import math, struct
         from live_transcript.transcription.batch import voiced_offset, voiced_pieces
+
         path = self.root / "silence-led.wav"
-        burst = struct.pack("<" + "h" * (2 * 16000),
-                            *[int(10000 * math.sin(2 * math.pi * 440 * i / 16000))
-                              for i in range(2 * 16000)])
+        burst = struct.pack(
+            "<" + "h" * (2 * 16000),
+            *[int(10000 * math.sin(2 * math.pi * 440 * i / 16000)) for i in range(2 * 16000)],
+        )
         with wave.open(str(path), "wb") as a:
-            a.setnchannels(1); a.setsampwidth(2); a.setframerate(16000)
-            a.writeframes(b"\0\0" * 16000 * 20); a.writeframes(burst)
-            a.writeframes(b"\0\0" * 16000 * 20); a.writeframes(burst)
+            a.setnchannels(1)
+            a.setsampwidth(2)
+            a.setframerate(16000)
+            a.writeframes(b"\0\0" * 16000 * 20)
+            a.writeframes(burst)
+            a.writeframes(b"\0\0" * 16000 * 20)
+            a.writeframes(burst)
         self.assertAlmostEqual(voiced_offset(path, 0, 60), 20.0, delta=0.5)
         pieces = voiced_pieces(path, 0, 60)
         self.assertTrue(pieces and 19.5 <= pieces[0][0] <= 20.2)

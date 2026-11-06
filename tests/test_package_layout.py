@@ -1,13 +1,16 @@
+"""Deployment is one reviewed package bundle, without legacy script aliases."""
+
 import importlib
+import ast
 import json
 import os
 from pathlib import Path
 import subprocess
 import sys
-import tarfile
 import tempfile
 import unittest
 from unittest.mock import patch
+import zipfile
 
 from live_transcript.runtime.deployment import build_bundle
 
@@ -15,114 +18,187 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageTests(unittest.TestCase):
-    def test_guest_bundle_bytes_do_not_depend_on_output_name_or_local_owner(self):
+    def test_guest_bundle_is_reproducible_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            first = directory / "first.tar.gz"
-            second = directory / "second.tar.gz"
-            build_bundle(ROOT, first)
-            build_bundle(ROOT, second)
+            first = Path(directory) / "first.pyz"
+            second = Path(directory) / "second.pyz"
+            build_bundle(first)
+            build_bundle(second)
             self.assertEqual(first.read_bytes(), second.read_bytes())
             self.assertEqual(first.stat().st_mode & 0o777, 0o600)
+
+    def test_package_and_development_tools_do_not_import_retired_modules(self):
+        for folder in (ROOT / "src/live_transcript", ROOT / "tools"):
+            for path in folder.rglob("*.py"):
+                for node in ast.walk(ast.parse(path.read_text())):
+                    modules = (
+                        [node.module]
+                        if isinstance(node, ast.ImportFrom) and not node.level
+                        else [alias.name for alias in node.names]
+                        if isinstance(node, ast.Import)
+                        else []
+                    )
+                    for module in modules:
+                        if not module or not module.startswith(("live_transcript", "tools")):
+                            continue
+                        base = (
+                            ROOT
+                            / ("src" if module.startswith("live_transcript") else "")
+                            / module.replace(".", "/")
+                        )
+                        self.assertTrue(
+                            base.with_suffix(".py").is_file() or (base / "__init__.py").is_file(),
+                            str(path.relative_to(ROOT)) + ": " + module,
+                        )
 
     def test_operator_modules_are_safe_to_import(self):
         with (
             patch("subprocess.run", side_effect=AssertionError("import attempted an operation")),
             patch("os.kill", side_effect=AssertionError("import sent a signal")),
         ):
-            for module in (
-                "capture.audio",
-                "capture.pulse",
-                "providers.video",
-                "runtime.postprocess",
-            ):
+            for module in ("capture.audio", "providers.video", "runtime.postprocess"):
                 name = "live_transcript." + module
                 sys.modules.pop(name, None)
-                imported = importlib.import_module(name)
-                self.assertTrue(callable(imported.main))
+                self.assertTrue(callable(importlib.import_module(name).main))
 
-    def test_guest_bundle_bootstraps_its_own_package_without_installation(self):
+    def test_guest_bundle_runs_without_an_installation_or_source_wrappers(self):
         with tempfile.TemporaryDirectory(prefix="guest package with spaces ") as directory:
             directory = Path(directory)
-            bundle = directory / "guest.tar.gz"
-            build_bundle(ROOT, bundle)
-            guest = directory / "guest"
-            guest.mkdir()
-            with tarfile.open(bundle) as archive:
-                names = archive.getnames()
-                self.assertTrue(
-                    all(m.isfile() and not m.uname and not m.gname for m in archive.getmembers())
-                )
-                self.assertNotIn("config.toml", names)
+            bundle = directory / "live-transcript.pyz"
+            build_bundle(bundle)
+            with zipfile.ZipFile(bundle) as archive:
+                names = archive.namelist()
+                self.assertIn("live_transcript/providers/google_meet.py", names)
                 self.assertFalse(
-                    any(n.startswith(("recordings/", "models/", ".git/")) for n in names)
+                    any(n.startswith(("tools/", "recordings/", "models/")) for n in names)
                 )
-                archive.extractall(guest, filter="data")
+                self.assertNotIn("join_meeting.py", names)
+                self.assertNotIn("_bootstrap.py", names)
+                self.assertEqual(set(n for n in names if "/" not in n), {"__main__.py"})
             config = directory / "config.toml"
-            config.write_text("[paths]\nroot = " + json.dumps(str(guest)) + "\n")
+            config.write_text("[paths]\nroot=" + json.dumps(str(directory)) + "\n")
             env = dict(os.environ, LIVE_TRANSCRIPT_CONFIG=str(config))
             env.pop("PYTHONPATH", None)
             result = subprocess.run(
-                [
-                    sys.executable,
-                    "-c",
-                    "import join_meeting,runtime_config,json; "
-                    "print(json.dumps([join_meeting.__name__,runtime_config.__file__]))",
-                ],
-                cwd=guest,
+                [sys.executable, "-I", str(bundle), "config"],
+                cwd=directory,
                 env=env,
                 capture_output=True,
                 text=True,
                 check=True,
                 timeout=10,
             )
-            module, path = json.loads(result.stdout)
-            self.assertEqual(module, "live_transcript.providers.zoom")
-            self.assertTrue(Path(path).is_relative_to(guest))
+            self.assertEqual(json.loads(result.stdout)["paths"]["root"], str(directory))
+
+    def fake_package(self, root, extra=""):
+        package = root / "src/live_transcript"
+        package.mkdir(parents=True)
+        (package / "__init__.py").write_text("")
+        (root / "PUBLIC_SOURCE_FILES.txt").write_text(
+            "PUBLIC_SOURCE_FILES.txt\nsrc/live_transcript/__init__.py\n" + extra
+        )
+        return package
 
     def test_guest_bundle_excludes_unlisted_runtime_files(self):
         with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            root = directory / "source"
-            root.mkdir()
-            for name in (
-                "_bootstrap.py",
-                "pyproject.toml",
-                "orphan_sweep.sh",
-                "prep_remote.sh",
-                "vm_pa_fix.sh",
-                "vm_stop_joiner.sh",
-            ):
-                (root / name).write_text("# fixture\n")
-            (root / "docs").mkdir()
-            (root / "docs/module-map.json").write_text("{}")
-            (root / "src/live_transcript").mkdir(parents=True)
-            (root / "src/live_transcript/__init__.py").write_text("")
-            (root / "tools").mkdir()
+            root = Path(directory)
+            package = self.fake_package(root)
             (root / "config.toml").write_text("private fixture")
             (root / "recordings").mkdir()
             (root / "recordings/private.txt").write_text("private fixture")
-            selected = [
-                p.relative_to(root).as_posix()
-                for p in root.rglob("*")
-                if p.is_file() and p.name != "config.toml" and "recordings" not in p.parts
-            ]
-            (root / "PUBLIC_SOURCE_FILES.txt").write_text(
-                "PUBLIC_SOURCE_FILES.txt\n" + "\n".join(selected) + "\n"
-            )
-            names = build_bundle(root, directory / "guest.tar.gz")
-            self.assertNotIn("config.toml", names)
-            self.assertNotIn("recordings/private.txt", names)
+            names = build_bundle(root / "bundle.pyz", package_dir=package)
+            self.assertEqual(set(names), {"live_transcript/__init__.py", "__main__.py"})
 
-    def test_guest_bundle_refuses_symlinked_source(self):
+    def test_guest_bundle_rejects_unreviewed_or_symlinked_python_source(self):
         with tempfile.TemporaryDirectory() as directory:
-            directory = Path(directory)
-            (directory / "docs").mkdir()
-            (directory / "docs/module-map.json").write_text("{}")
-            (directory / "target").write_text("not source")
-            (directory / "_bootstrap.py").symlink_to(directory / "target")
-            (directory / "PUBLIC_SOURCE_FILES.txt").write_text(
-                "PUBLIC_SOURCE_FILES.txt\n_bootstrap.py\npyproject.toml\ndocs/module-map.json\norphan_sweep.sh\nprep_remote.sh\nvm_pa_fix.sh\nvm_stop_joiner.sh\n"
-            )
+            root = Path(directory)
+            package = self.fake_package(root)
+            (package / "unexpected.py").write_text("unreviewed")
             with self.assertRaises(ValueError):
-                build_bundle(directory, directory / "guest.tar.gz")
+                build_bundle(root / "bundle.pyz", package_dir=package)
+            (package / "unexpected.py").unlink()
+            (package / "__init__.py").unlink()
+            (root / "outside").write_text("private fixture")
+            (package / "__init__.py").symlink_to(root / "outside")
+            with self.assertRaises(ValueError):
+                build_bundle(root / "bundle.pyz", package_dir=package)
+
+
+class WorkerTests(unittest.TestCase):
+    def test_children_stay_in_the_same_guest_bundle(self):
+        from live_transcript.worker import command
+
+        with patch.dict(os.environ, {"LIVE_TRANSCRIPT_BUNDLE": "/guest/live-transcript.pyz"}):
+            self.assertEqual(
+                command("render", "--example", python="python3"),
+                ["python3", "-u", "/guest/live-transcript.pyz", "render", "--example"],
+            )
+        with patch.dict(os.environ, clear=True):
+            self.assertEqual(
+                command("config", python="python3"),
+                ["python3", "-u", "-m", "live_transcript.worker", "config"],
+            )
+        with self.assertRaises(ValueError):
+            command("unknown")
+
+    def test_process_ownership_rejects_role_names_in_unrelated_arguments(self):
+        from live_transcript.worker import is_role_process
+
+        for argv in (
+            ["python3", "-u", "-m", "live_transcript.worker", "stream"],
+            [b"/venv/bin/python3.11", b"-u", b"/guest/live-transcript.pyz", b"stream", b""],
+        ):
+            self.assertTrue(is_role_process(argv, {"stream"}))
+            self.assertFalse(is_role_process(argv, {"join"}))
+        for argv in (
+            [],
+            ["python3", "-m", "live_transcript.worker"],
+            ["echo", "python3", "-m", "live_transcript.worker", "stream"],
+            ["python3", "unrelated.py", "/guest/live-transcript.pyz", "stream"],
+            ["python3", "-c", "print(1)", "-m", "live_transcript.worker", "stream"],
+        ):
+            self.assertFalse(is_role_process(argv, {"stream"}), argv)
+
+    def test_dispatch_forwards_arguments_and_restores_argv_on_failure(self):
+        from live_transcript.worker import main
+
+        original = sys.argv
+
+        def run(*args, **kwargs):
+            self.assertEqual(args, ("live_transcript.core.config",))
+            self.assertEqual(sys.argv[1:], ["--shell"])
+            self.assertTrue(kwargs["alter_sys"])
+            raise RuntimeError("fixture")
+
+        with patch("live_transcript.worker.runpy.run_module", side_effect=run):
+            with self.assertRaisesRegex(RuntimeError, "fixture"):
+                main(["config", "--shell"])
+        self.assertIs(sys.argv, original)
+
+    def test_job_listing_uses_update_time_and_omits_private_error_text(self):
+        from live_transcript.storage.worker import recent_jobs
+
+        with tempfile.TemporaryDirectory() as directory:
+            logs = Path(directory)
+            (logs / "recovery-z.json").write_text(json.dumps({"status": "complete", "utc": 1}))
+            (logs / "recovery-a.json").write_text(
+                json.dumps(
+                    {
+                        "status": "postprocessing",
+                        "utc": 9,
+                        "source": "private invitation",
+                        "error": "private error",
+                    }
+                )
+            )
+            (logs / "postprocess-broken.json").write_text("{")
+            with patch("live_transcript.storage.worker.get", return_value=directory):
+                latest = recent_jobs(limit=1)
+                all_jobs = recent_jobs()
+                with self.assertRaises(ValueError):
+                    recent_jobs(limit=0)
+            self.assertEqual(latest[0]["job"], "recovery-a")
+            self.assertEqual(latest[0]["status"], "postprocessing")
+            self.assertIn("unreadable", [row["status"] for row in all_jobs])
+            self.assertNotIn("private error", json.dumps(all_jobs))
+            self.assertNotIn("private invitation", json.dumps(all_jobs))

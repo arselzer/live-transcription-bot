@@ -1,5 +1,8 @@
 """One operator interface; Hermes and calendar automation are optional clients."""
 
+from live_transcript.worker import command as worker_command
+from live_transcript.worker import guest_command
+
 import argparse
 import json
 import os
@@ -8,7 +11,6 @@ import shlex
 import shutil
 import socket
 import subprocess
-import sys
 import urllib.request
 
 
@@ -43,7 +45,7 @@ def remote_status(meeting):
 
     if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", token):
         raise ValueError("invalid session token")
-    command = shlex.join(["python3", get("vm", "home") + "/meeting_session.py", "--status", token])
+    command = shlex.join(guest_command("session", "--status", token))
     result = subprocess.run(
         [
             "ssh",
@@ -89,7 +91,12 @@ def doctor():
         path = Path(get("paths", name))
         good = path.is_file() and path.stat().st_size > 0
         add(name, "pass" if good else "fail", str(path))
-    free = shutil.disk_usage(get("paths", "root")).free
+    # A new installation may not have created its data workspace yet. Check
+    # its existing ancestor without creating state during a read-only preflight.
+    workspace = Path(get("paths", "root"))
+    while not workspace.exists() and workspace.parent != workspace:
+        workspace = workspace.parent
+    free = shutil.disk_usage(workspace).free
     add(
         "host disk reserve",
         "pass" if free > get("storage", "host_free_reserve_bytes") else "fail",
@@ -230,6 +237,16 @@ def main(argv=None):
         "calendar", help="reconcile optional ICS calendar and exact launch timers"
     )
     calendar.add_argument("--dry-run", action="store_true")
+    commands.add_parser("jobs", help="show recent recording retrieval and processing jobs")
+    process = commands.add_parser(
+        "process", help="transcribe and summarize an existing 16 kHz mono WAV"
+    )
+    process.add_argument("wav")
+    serve = commands.add_parser("serve", help="run the caption daemon or a local speech service")
+    serve.add_argument("service", choices=("captions", "asr"))
+    serve.add_argument("arguments", nargs=argparse.REMAINDER)
+    bundle = commands.add_parser("bundle", help="build the self-contained browser-guest program")
+    bundle.add_argument("output")
     args = parser.parse_args(argv)
     if args.config:
         os.environ["LIVE_TRANSCRIPT_CONFIG"] = str(Path(args.config).expanduser().absolute())
@@ -284,7 +301,9 @@ def main(argv=None):
                 options += ["--passcode", args.passcode]
             if args.dry:
                 options += ["--dry"]
-            return subprocess.call([str(Path(get("paths", "root")) / "scribe_run.sh"), *options])
+            from live_transcript.runtime.launcher import start
+
+            return start(*options)
         elif args.command == "stop":
             meeting = current()
             if meeting.get("status") not in ("active", "control_lost") or not meeting.get("run_id"):
@@ -293,9 +312,7 @@ def main(argv=None):
 
             if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", meeting["run_id"]):
                 raise ValueError("invalid session token")
-            command = shlex.join(
-                ["python3", get("vm", "home") + "/meeting_session.py", "--stop", meeting["run_id"]]
-            )
+            command = shlex.join(guest_command("session", "--stop", meeting["run_id"]))
             return subprocess.run(
                 [
                     "ssh",
@@ -311,21 +328,30 @@ def main(argv=None):
                 timeout=180,
             ).returncode
         elif args.command == "say":
-            return subprocess.call(
-                [
-                    sys.executable,
-                    str(Path(get("paths", "root")) / "voice_control.py"),
-                    "--lang",
-                    args.lang,
-                    args.text,
-                ]
-            )
+            return subprocess.call(worker_command("tts", "--lang", args.lang, args.text))
         elif args.command == "recover":
             from live_transcript.storage.worker import run
 
             result = run(get("vm", "ssh"), args.guest_wav, args.token)
             emit(result, args.json)
             return 1 if result.get("status") in ("retrieval_failed", "postprocess_failed") else 0
+        elif args.command == "jobs":
+            from live_transcript.storage.worker import recent_jobs
+
+            emit({"jobs": recent_jobs()}, args.json)
+        elif args.command == "process":
+            from live_transcript.runtime.postprocess import run_logged
+
+            run_logged([args.wav])
+        elif args.command == "serve":
+            from live_transcript.worker import main as run_service
+
+            return run_service([args.service, *args.arguments])
+        elif args.command == "bundle":
+            from live_transcript.runtime.deployment import build_bundle
+
+            members = build_bundle(args.output)
+            emit({"bundle": args.output, "files": len(members)}, args.json)
         elif args.command == "watchdog":
             from live_transcript.runtime.watchdog import main as supervise
 

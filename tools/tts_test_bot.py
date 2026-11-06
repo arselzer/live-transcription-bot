@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""A separate, temporary Proton participant exercising the reusable voice mic."""
+"""A separate, temporary meeting participant exercising the reusable voice mic."""
 
 import argparse
+from contextlib import ExitStack
 import json
 from pathlib import Path
 from live_transcript.core.config import get
@@ -95,6 +96,9 @@ def main():
         ids = {int(x) for x in a.phrase_ids.split(",")}
         plan = [p for p in plan if p["id"] in ids]
     proton = urlsplit(a.meeting).hostname == "meet.proton.me"
+    google = urlsplit(a.meeting).hostname == "meet.google.com"
+    from live_transcript.providers import google_meet
+
     claim_test_join("tts-" + str(a.port))
     sink = None
     module = None
@@ -107,36 +111,48 @@ def main():
 
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
-    with sync_playwright() as p:
-        context = p.chromium.launch_persistent_context(
-            str(Path(get("vm", "home")) / ("chrome-tts-test-prof-" + str(a.port))),
-            headless=False,
-            ignore_default_args=["--mute-audio"],
-            env=dict(os.environ, **({"PULSE_SINK": sink} if sink else {})),
-            args=[
-                "--no-sandbox",
-                "--autoplay-policy=no-user-gesture-required",
-                *(["--mute-audio"] if proton else []),
-                "--remote-debugging-port=" + str(a.port),
-                "--remote-debugging-address=127.0.0.1",
-            ],
-            locale="en-US",
-            viewport={"width": 1280, "height": 800},
-        )
+    with sync_playwright() as p, ExitStack() as browser_stack:
+        profile = Path(get("vm", "home")) / ("chrome-tts-test-prof-" + str(a.port))
+        environment = dict(os.environ, **({"PULSE_SINK": sink} if sink else {}))
+        flags = [
+            "--no-sandbox",
+            "--autoplay-policy=no-user-gesture-required",
+            *(["--mute-audio"] if proton else []),
+            "--remote-debugging-port=" + str(a.port),
+            "--remote-debugging-address=127.0.0.1",
+        ]
+        if google:
+            from live_transcript.providers.browser import google_context
+
+            context = browser_stack.enter_context(
+                google_context(p, profile, env=environment, args=flags, port=a.port)
+            )
+        else:
+            context = p.chromium.launch_persistent_context(
+                str(profile),
+                headless=False,
+                ignore_default_args=["--mute-audio"],
+                env=environment,
+                args=flags,
+                locale="en-US",
+                viewport={"width": 1280, "height": 800},
+            )
         try:
             for origin in (
                 ["https://meet.proton.me"]
                 if proton
+                else ["https://meet.google.com"]
+                if google
                 else ["https://zoom.us", "https://app.zoom.us", "https://us06web.zoom.us"]
             ):
                 context.grant_permissions(["camera", "microphone"], origin=origin)
             context.add_init_script(MIC_SCRIPT)
             context.add_init_script(PEERS_JS)
             pg = context.new_page()
-            from live_transcript.runtime.entry import meeting_url, joined_controls
+            from live_transcript.providers.zoom import meeting_url, joined_controls
 
             pg.goto(
-                a.meeting if proton else meeting_url(a.meeting),
+                a.meeting if proton or google else meeting_url(a.meeting),
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
@@ -144,6 +160,10 @@ def main():
                 prejoin(pg, a.name, timeout=180)
                 click_if_visible(pg, "Turn off camera")
                 click_if_visible(pg, "Unmute microphone")
+            elif google:
+                google_meet.prejoin(pg, a.name, timeout=180)
+                google_meet.click_if_visible(pg, "Turn off camera")
+                google_meet.click_if_visible(pg, "Turn on microphone")
             else:
                 zoom_prejoin(pg, a.name)
             print("TTS TEST PARTICIPANT JOINED", flush=True)
@@ -153,20 +173,28 @@ def main():
             for phrase in plan:
                 while a.start_at and time.time() < a.start_at + phrase.get("start_offset", 0):
                     pg.wait_for_timeout(100)
-                if not (joined(pg) if proton else joined_controls(pg)):
+                admitted = (
+                    joined(pg)
+                    if proton
+                    else google_meet.joined(pg)
+                    if google
+                    else joined_controls(pg)
+                )
+                if not admitted:
                     raise RuntimeError("test participant disconnected")
                 if not proton:
                     from live_transcript.speech.controller import VoiceController
 
                     # A persisted Zoom profile may reapply mute after admission.
                     controls = VoiceController.__new__(VoiceController)
-                    controls.page, controls.provider = pg, "zoom"
+                    controls.page, controls.provider = pg, "google" if google else "zoom"
                     unmute = controls.mic_button(True)
                     if unmute is not None and unmute.is_visible():
                         unmute.click(timeout=1500, no_wait_after=True)
                         pg.wait_for_timeout(400)
-                    if controls.mic_button(False) is None:
-                        raise RuntimeError("Zoom sender microphone is still muted")
+                    active = controls.mic_button(False)
+                    if active is None or not active.is_visible():
+                        raise RuntimeError("Test sender microphone is still muted")
                 wav = (directory / phrase["file"]).read_bytes()
                 result = play_wav(pg, wav, monitor=False)
                 event = dict(phrase, **result)
@@ -207,7 +235,7 @@ def main():
                         max_rms=math.sqrt(sum(x * x for x in samples) / max(1, len(samples)))
                         / 32768,
                         tracks=1,
-                        source="isolated Zoom downlink sink",
+                        source="isolated meeting downlink sink",
                     )
             else:
                 reply = pg.evaluate("""async () => {
@@ -233,11 +261,17 @@ def main():
         except Exception as exc:
             try:
                 reason = getattr(exc, "admission_reason", None) or (
-                    "admission_error"
-                    if proton
+                    getattr(exc, "reason", "admission_error")
+                    if proton or google
                     else inspect_zoom(pg, joined=joined_controls(pg)) or "admission_error"
                 )
-                save_failure(pg, directory, reason, a.name, "proton" if proton else "zoom")
+                save_failure(
+                    pg,
+                    directory,
+                    reason,
+                    a.name,
+                    "proton" if proton else "google" if google else "zoom",
+                )
             except Exception:
                 pass
             raise
@@ -261,7 +295,8 @@ def main():
                                 break
                 except Exception:
                     pass
-            context.close()
+            if not google:
+                context.close()
             if module:
                 subprocess.run(["pactl", "unload-module", module], capture_output=True)
 

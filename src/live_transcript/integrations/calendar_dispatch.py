@@ -12,9 +12,14 @@ import hashlib
 import json
 import math
 import os
+from live_transcript.runtime.launcher import (
+    command as launch_command,
+    environment as launch_environment,
+)
 from pathlib import Path
 import subprocess
 import sys
+from live_transcript.worker import command as worker_command
 import time
 
 from live_transcript.capture.guard import atomic_json
@@ -120,9 +125,7 @@ def schedule_locked(event, now):
                 "--timer-property=Persistent=true",
                 "--property=TimeoutStartSec=infinity",
                 "--property=Nice=0",
-                sys.executable,
-                str(Path(get("paths", "root")) / "calendar_dispatch.py"),
-                str(path),
+                *worker_command("calendar-dispatch", path),
             ],
             capture_output=True,
             text=True,
@@ -231,8 +234,8 @@ def dispatch(path):
                 args += ["--passcode", current["passcode"]]
             with open(ROOT / (path.stem + ".log"), "ab") as log:
                 proc = subprocess.Popen(
-                    [str(Path(get("paths", "root")) / "scribe_run.sh"), *args],
-                    env=env,
+                    launch_command(*args),
+                    env=launch_environment(env),
                     stdin=subprocess.DEVNULL,
                     stdout=log,
                     stderr=log,

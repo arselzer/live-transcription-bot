@@ -1,4 +1,4 @@
-"""Explicit speech requests for the Proton bot; silent unless a request arrives."""
+"""Explicit speech requests for the meeting bot; silent unless a request arrives."""
 
 import io
 import json
@@ -41,6 +41,10 @@ class VoiceController:
         tmp.replace(ready)
 
     def mic_button(self, unmute):
+        if self.provider == "google":
+            from live_transcript.providers.google_meet import button
+
+            return button(self.page, "Turn on microphone" if unmute else "Turn off microphone")
         if self.provider == "proton":
             label = "Unmute microphone" if unmute else "Mute microphone"
             return self.page.get_by_role("button", name=label, exact=True).first

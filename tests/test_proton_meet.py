@@ -128,7 +128,9 @@ class ProtonTests(unittest.TestCase):
         # of the user's real meeting state.
         import re
 
-        source = (Path(__file__).resolve().parents[1] / "scribe_run.sh").read_text()
+        source = (
+            Path(__file__).resolve().parents[1] / "src/live_transcript/runtime/launch.sh"
+        ).read_text()
         remote_code = re.search(r"REMOTE_CMD=.*?<<'PY'\n(.*?)\nPY", source, re.S)[1]
         args = [
             "https://meet.proton.me/join/id-ABC#pwd-secret",

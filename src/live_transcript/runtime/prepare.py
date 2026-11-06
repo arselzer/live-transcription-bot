@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Prepare an idle bot VM without killing unrelated displays or live meetings."""
 
+from live_transcript.worker import command as worker_command
+
 import os
 from pathlib import Path
 import shutil
@@ -17,13 +19,9 @@ HOME = Path(get("vm", "home"))
 
 
 def owned_process(args):
-    helpers = {
-        str(HOME / "caption_stream.py").encode(),
-        str(HOME / "caption_render.py").encode(),
-        b"caption_stream.py",
-        b"caption_render.py",
-    }
-    if any(arg in helpers for arg in args):
+    from live_transcript.worker import is_role_process
+
+    if is_role_process(args, {"stream", "render"}):
         return True
     if args and args[0].rsplit(b"/", 1)[-1] == b"ffmpeg":
         return any(
@@ -37,6 +35,7 @@ def owned_process(args):
         in (
             ("--user-data-dir=" + str(HOME / "chrome-prof")).encode(),
             ("--user-data-dir=" + str(HOME / "chrome-proton-prof")).encode(),
+            ("--user-data-dir=" + str(HOME / "chrome-meet-prof")).encode(),
         )
         for arg in args
     )
@@ -103,7 +102,7 @@ def prepare_contents():
         (HOME / name).unlink(missing_ok=True)
     Path("/tmp/cap_session_start").unlink(missing_ok=True)
     result = subprocess.run(
-        ["python3", str(HOME / "audioroute.py")],
+        worker_command("audio"),
         capture_output=True,
         text=True,
         timeout=30,

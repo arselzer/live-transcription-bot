@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Zoom scribe bot: joins a meeting via the web client (headful Chromium under Xvfb,
+"""Zoom meeting adapter: joins a meeting via the web client (headful Chromium under Xvfb,
 records the decoded meeting audio independently of the live-caption pipeline.
-Usage: join_meeting.py <meeting-url-or-id> [--name NAME] [--out FILE] [--max-min N] [--dry]"""
+Usage: live-transcript start <meeting-url-or-id> [--name NAME] [--out FILE] [--max-min N] [--dry]"""
+
+from live_transcript.worker import command as worker_command
 
 import argparse, json, os, re, signal, subprocess, sys, time, uuid
 from datetime import datetime
@@ -181,7 +183,7 @@ def main(name_retry_allowed=False, absolute_deadline=None):
             sys.exit(6)
         ctx = p.chromium.launch_persistent_context(
             (VM_HOME + "/chrome-prof"),
-            env=dict(os.environ, PULSE_SINK="scribe"),
+            env=dict(os.environ, PULSE_SINK=get("audio", "sink")),
             headless=False,
             ignore_default_args=["--mute-audio"],
             args=[
@@ -690,7 +692,7 @@ def main(name_retry_allowed=False, absolute_deadline=None):
                 "-f",
                 "pulse",
                 "-i",
-                "scribe.monitor",
+                get("audio", "sink") + ".monitor",
                 "-ac",
                 "1",
                 "-ar",
@@ -729,7 +731,7 @@ def main(name_retry_allowed=False, absolute_deadline=None):
         cs = None
         try:
             cs = subprocess.Popen(
-                ["python3", (VM_HOME + "/caption_stream.py"), os.path.basename(out)[:-4]],
+                worker_command("stream", os.path.basename(out)[:-4]),
                 stdout=open("/tmp/capstream.log", "a"),
                 stderr=subprocess.STDOUT,
             )
@@ -860,7 +862,7 @@ def main(name_retry_allowed=False, absolute_deadline=None):
             if (cs is None or cs.poll() is not None) and time.time() >= next_caption_restart:
                 try:
                     cs = subprocess.Popen(
-                        ["python3", (VM_HOME + "/caption_stream.py"), rec_id],
+                        worker_command("stream", rec_id),
                         stdout=open("/tmp/capstream.log", "a"),
                         stderr=subprocess.STDOUT,
                     )
@@ -879,7 +881,7 @@ def main(name_retry_allowed=False, absolute_deadline=None):
                         "-f",
                         "pulse",
                         "-i",
-                        "scribe.monitor",
+                        get("audio", "sink") + ".monitor",
                         "-ac",
                         "1",
                         "-ar",
@@ -1206,7 +1208,12 @@ def run_with_name_fallbacks():
     from live_transcript.providers.google_meet import is_google_url
 
     original = list(sys.argv)
-    if len(original) < 2 or "--dry" in original or is_proton_url(original[1]) or is_google_url(original[1]):
+    if (
+        len(original) < 2
+        or "--dry" in original
+        or is_proton_url(original[1])
+        or is_google_url(original[1])
+    ):
         return main()
     options, minutes = rejoin_options(original[2:])
     first = options.get("--name", get("identity", "name"))

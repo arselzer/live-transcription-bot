@@ -38,5 +38,4 @@ storage_policy.json
 htmlcov/
 
 .ruff_cache/
-.ruff_cache/
 review2/

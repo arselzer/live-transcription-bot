@@ -11,6 +11,11 @@ from live_transcript.capture.guard import atomic_json
 from live_transcript.core.config import get
 
 REASONS = {
+    "google_access_denied": re.compile(
+        r"you (?:can.t|cannot) join this (?:video call|meeting)", re.I
+    ),
+    "google_sign_in_required": re.compile(r"(?:sign in|log in) to join", re.I),
+    "google_admission_timeout": re.compile(r"no confirmed admission", re.I),
     "zoom_automation_blocked": re.compile(
         r"automated bots (?:are not|aren[\x27\u2019]t) allowed|we detected you may be a bot", re.I
     ),

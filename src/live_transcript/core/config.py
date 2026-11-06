@@ -16,7 +16,7 @@ import tomllib
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 from live_transcript.core.files import atomic_text
 
-ROOT = Path(__file__).resolve().parents[3]
+ROOT = Path(os.environ.get("XDG_DATA_HOME", str(Path.home() / ".local/share"))) / "live-transcript"
 DEFAULTS = {
     "paths": {
         "root": str(ROOT),
@@ -30,6 +30,7 @@ DEFAULTS = {
         "small_model": str(ROOT / "models/whisper-local/ggml-small.bin"),
         "cpu_model": str(ROOT / "models/faster-whisper-large-v3"),
         "glossary": "",
+        "tts": str(ROOT / "tts"),
         "diarization_model": str(ROOT / "models/ecapa"),
         "whisper_server": str(Path.home() / "whisper.cpp/build/bin/whisper-server"),
         "vad": str(ROOT / "models/whisper-local/ggml-silero-v6.2.0.bin"),
@@ -45,11 +46,13 @@ DEFAULTS = {
     },
     "vm": {
         "ssh": "",
-        "name": "scribe",
+        "name": "transcript",
         "home": "/home/transcript",
         "ip": "",
         "manage_libvirt": True,
     },
+    "audio": {"sink": "transcript"},
+    "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
     "caption": {
         "host": "127.0.0.1",
         "bind": "127.0.0.1",
@@ -132,6 +135,7 @@ def load(path=None):
             base = Path(config["paths"]["root"]).expanduser()
             for key, suffix in {
                 "state": "state",
+                "tts": "tts",
                 "logs": "logs",
                 "recordings": "recordings",
                 "archive_destination": "recordings",
@@ -162,6 +166,13 @@ def load(path=None):
         ZoneInfo(config["calendar"]["timezone"])
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError("invalid calendar.timezone") from exc
+    if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", config["audio"]["sink"]):
+        raise ValueError("audio.sink must be a simple PulseAudio sink name")
+    if config["browser"]["google_mode"] not in ("cdp", "playwright"):
+        raise ValueError("browser.google_mode must be cdp or playwright")
+    executable = config["browser"]["google_executable"]
+    if executable and (not executable.startswith("/") or any(ord(c) < 32 for c in executable)):
+        raise ValueError("browser.google_executable must be an absolute guest path")
     port = config["caption"]["port"]
     if type(port) is not int or not 1 <= port <= 65535:
         raise ValueError("caption.port must be an integer between 1 and 65535")
@@ -217,7 +228,7 @@ def load(path=None):
         raise ValueError(
             "admission.zoom_name_fallbacks allows at most two names of 1–64 characters"
         )
-    config["_file"] = str(selected)
+    config["_file"] = str(selected.resolve())
     return config
 
 
@@ -230,6 +241,7 @@ def get(section, key):
 
 def shell_values():
     mapping = {
+        "LIVE_TRANSCRIPT_CONFIG": CONFIG["_file"],
         "LT_ROOT": get("paths", "root"),
         "LT_LOGS": get("paths", "logs"),
         "LT_RECORDINGS": get("paths", "recordings"),
@@ -252,6 +264,8 @@ def write_vm_config(destination):
     home = get("vm", "home")
     sections = {
         "caption": CONFIG["caption"],
+        "audio": CONFIG["audio"],
+        "browser": CONFIG["browser"],
         "recovery": CONFIG["recovery"],
         "admission": CONFIG["admission"],
         "identity": CONFIG["identity"],

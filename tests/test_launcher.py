@@ -18,37 +18,19 @@ class LauncherTests(unittest.TestCase):
         self.bin.mkdir()
         (self.root / "logs").mkdir()
         source = Path(__file__).resolve().parents[1]
-        for path in source.glob("*.py"):
-            shutil.copy2(path, self.root / path.name)
-        for name in (
-            "scribe_run.sh",
-            "orphan_sweep.sh",
-            "prep_remote.sh",
-            "vm_pa_fix.sh",
-            "vm_stop_joiner.sh",
-        ):
-            shutil.copy2(source / name, self.root / name)
         shutil.copytree(
             source / "src", self.root / "src", ignore=shutil.ignore_patterns("__pycache__")
         )
-        shutil.copytree(
-            source / "tools", self.root / "tools", ignore=shutil.ignore_patterns("__pycache__")
-        )
-        (self.root / "docs").mkdir()
-        shutil.copy2(source / "docs/module-map.json", self.root / "docs/module-map.json")
-        shutil.copy2(source / "pyproject.toml", self.root / "pyproject.toml")
         shutil.copy2(source / "PUBLIC_SOURCE_FILES.txt", self.root / "PUBLIC_SOURCE_FILES.txt")
-        (self.root / "recording_storage.py").write_text("")
         self.config = self.root / "config.toml"
         self.config.write_text(
             "[paths]\nroot = "
             + json.dumps(str(self.root))
             + '\n[vm]\nssh = "transcript@192.0.2.20"\nip = "192.0.2.20"\n'
         )
-        (self.root / "pull_recording.py").write_text("raise SystemExit(1)\n")
         self.stub = self.bin / "stub"
         self.stub.write_text("""#!/usr/bin/python3
-import json,os,sys
+import json,os,sys,subprocess
 from pathlib import Path
 root=Path(os.environ['TEST_ROOT']);name=Path(sys.argv[0]).name;mode=os.environ['TEST_MODE']
 with open(root/'calls.jsonl','a') as f:f.write(json.dumps([name,*sys.argv[1:]])+'\\n')
@@ -57,7 +39,9 @@ if name=='sudo':
 elif name=='ssh':
  command=sys.argv[-1]
  if 'list-units' in command and mode=='busy':raise SystemExit(3)
- if 'exec ' in command and 'meeting_session.py' in command:
+ if 'list-units' in command and mode=='probe-failed':
+  raise SystemExit(subprocess.run(['bash','-c',command]).returncode)
+ if 'exec ' in command and 'live-transcript.pyz' in command and ' session ' in command:
   if mode=='automation-blocked':
    print('ADMISSION_FAILED '+json.dumps(dict(reason='zoom_automation_blocked',automatic_retry=False)))
    print('ADMISSION_DIAGNOSTICS to /home/transcript/rec/fixture.admission')
@@ -74,28 +58,63 @@ elif name=='ssh':
 elif name=='nc':
  sys.stdin.read()
  if mode=='backend-down':raise SystemExit(1)
-elif name=='systemctl' and mode=='backend-down':raise SystemExit(1)
+elif name=='systemctl' and mode in ('backend-down','probe-failed'):raise SystemExit(1)
 """)
         self.stub.chmod(0o755)
         for name in ("sudo", "ssh", "scp", "systemctl", "systemd-run", "nc", "sleep"):
             (self.bin / name).symlink_to(self.stub)
 
-    def run_launcher(self, mode="dry", args=("--dry",)):
+    def run_launcher(
+        self, mode="dry", args=("--dry",), config_from_xdg=False, relative_config=False
+    ):
         env = dict(
             os.environ,
             PATH=str(self.bin) + ":" + os.environ["PATH"],
             TEST_ROOT=str(self.root),
             TEST_MODE=mode,
             LIVE_TRANSCRIPT_CONFIG=str(self.config),
+            LIVE_TRANSCRIPT_PYTHON=__import__("sys").executable,
+            PYTHONPATH=str(self.root / "src"),
         )
+        if relative_config:
+            env["LIVE_TRANSCRIPT_CONFIG"] = os.path.relpath(self.config)
+        if config_from_xdg:
+            selected = self.root / "config/live-transcript/config.toml"
+            selected.parent.mkdir(parents=True)
+            shutil.copy2(self.config, selected)
+            env.pop("LIVE_TRANSCRIPT_CONFIG", None)
+            env["XDG_CONFIG_HOME"] = str(self.root / "config")
         for name in ("LT_EXPECT_RUN_ID", "LT_DEADLINE", "LT_WAIT_FOR_LOCK"):
             env.pop(name, None)
         return subprocess.run(
-            [str(self.root / "scribe_run.sh"), "12345678901", *args],
+            [
+                "bash",
+                str(self.root / "src/live_transcript/runtime/launch.sh"),
+                "12345678901",
+                *args,
+            ],
             env=env,
             capture_output=True,
             text=True,
             timeout=20,
+        )
+
+    def test_xdg_profile_is_retained_for_background_jobs(self):
+        result = self.run_launcher(config_from_xdg=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        calls = (self.root / "calls.jsonl").read_text()
+        self.assertIn(
+            "--setenv=LIVE_TRANSCRIPT_CONFIG="
+            + str(self.root / "config/live-transcript/config.toml"),
+            calls,
+        )
+
+    def test_relative_profile_is_absolute_for_detached_jobs(self):
+        result = self.run_launcher(relative_config=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn(
+            "--setenv=LIVE_TRANSCRIPT_CONFIG=" + str(self.config),
+            (self.root / "calls.jsonl").read_text(),
         )
 
     def test_busy_vm_cannot_clear_state_or_prepare_audio(self):
@@ -104,7 +123,14 @@ elif name=='systemctl' and mode=='backend-down':raise SystemExit(1)
         result = self.run_launcher("busy")
         self.assertEqual(result.returncode, 3, result.stderr)
         self.assertEqual(json.loads(path.read_text()), {"owner": "existing"})
-        self.assertNotIn("vm_prepare.py", (self.root / "calls.jsonl").read_text())
+        self.assertNotIn(" prepare ", (self.root / "calls.jsonl").read_text())
+
+    def test_failed_ownership_probe_never_deploys_or_changes_run_state(self):
+        result = self.run_launcher("probe-failed")
+        self.assertEqual(result.returncode, 3, result.stderr)
+        calls = [json.loads(line) for line in (self.root / "calls.jsonl").read_text().splitlines()]
+        self.assertFalse(any(call[0] in ("scp", "systemd-run") for call in calls))
+        self.assertFalse((self.root / "logs/current_meeting.json").exists())
 
     def test_provider_automation_denial_is_terminal_and_preserves_diagnostics(self):
         result = self.run_launcher("automation-blocked", ())
@@ -114,7 +140,7 @@ elif name=='systemctl' and mode=='backend-down':raise SystemExit(1)
         self.assertEqual(state["result"], "zoom_automation_blocked")
         self.assertEqual(state["remote_exit"], 4)
         self.assertIn("fixture.admission", (self.root / "calls.jsonl").read_text())
-        self.assertNotIn("recovery_worker.py", (self.root / "calls.jsonl").read_text())
+        self.assertNotIn("recover", (self.root / "calls.jsonl").read_text())
 
     def test_dry_run_finishes_without_postprocess_or_rejoin_state(self):
         result = self.run_launcher()
@@ -137,7 +163,10 @@ elif name=='systemctl' and mode=='backend-down':raise SystemExit(1)
         starts = [
             x[-1]
             for x in calls
-            if x[0] == "ssh" and "exec " in x[-1] and "meeting_session.py" in x[-1]
+            if x[0] == "ssh"
+            and "exec " in x[-1]
+            and "live-transcript.pyz" in x[-1]
+            and " session " in x[-1]
         ]
         self.assertEqual(len(starts), 2)
         self.assertEqual(starts[0], starts[1])
@@ -147,8 +176,8 @@ elif name=='systemctl' and mode=='backend-down':raise SystemExit(1)
         self.assertEqual(result.returncode, 0, result.stderr)
         state = json.loads((self.root / "logs/current_meeting.json").read_text())
         self.assertEqual(state["status"], "finished")
-        self.assertIn("recovery_worker.py", (self.root / "calls.jsonl").read_text())
-        self.assertNotIn("pull_recording.py", (self.root / "calls.jsonl").read_text())
+        self.assertIn("recover", (self.root / "calls.jsonl").read_text())
+        self.assertNotIn(" pull ", (self.root / "calls.jsonl").read_text())
 
     def test_caption_backend_outage_does_not_prevent_browser_launch(self):
         result = self.run_launcher("backend-down")

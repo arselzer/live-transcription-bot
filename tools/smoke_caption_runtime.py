@@ -6,10 +6,9 @@ import io
 import json
 import os
 from pathlib import Path
-from live_transcript.core.config import get
 import socket
 import subprocess
-import sys
+from live_transcript.worker import command as worker_command
 import tempfile
 import threading
 import time
@@ -65,7 +64,7 @@ def main():
 
         def launch():
             p = subprocess.Popen(
-                [sys.executable, str(Path(get("paths", "root")) / "captiond.py")],
+                worker_command("captions"),
                 env=env,
                 stdout=log,
                 stderr=log,

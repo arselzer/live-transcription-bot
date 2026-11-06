@@ -6,6 +6,8 @@ FLAC and Matroska segments remain usable after capture is interrupted. A restart
 uses new filenames, never overwrites earlier evidence, and records the gap.
 """
 
+from live_transcript.worker import command as worker_command
+
 import argparse
 import fcntl
 import hashlib
@@ -14,7 +16,6 @@ import os
 from pathlib import Path
 import signal
 import subprocess
-import sys
 import time
 from live_transcript.core.config import get
 from live_transcript.core.files import atomic_json as atomic_json
@@ -70,11 +71,12 @@ def commands(
     root,
     generation,
     display,
-    audio_source="scribe.monitor",
+    audio_source=None,
     segment_seconds=10,
     audio_segment_seconds=5,
 ):
     root = Path(root)
+    audio_source = audio_source or get("audio", "sink") + ".monitor"
     base = ["ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "warning", "-n"]
     segment = [
         "-f",
@@ -173,13 +175,14 @@ class Archive:
         max_seconds,
         provider="proton",
         cdp="http://127.0.0.1:9222",
-        audio_source="scribe.monitor",
+        audio_source=None,
     ):
         if (self.root / "config.json").exists():
             raise FileExistsError(
                 "Refusing to reuse an existing recording archive: " + str(self.root)
             )
         self.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+        audio_source = audio_source or get("audio", "sink") + ".monitor"
         config = dict(
             archive_version=2,
             started=started,
@@ -213,12 +216,7 @@ class Archive:
         ):
             if key in os.environ:
                 cmd.append(f"--setenv={key}={os.environ[key]}")
-        cmd += [
-            sys.executable,
-            str(Path(get("paths", "root")) / "recording_guard.py"),
-            "--root",
-            str(self.root),
-        ]
+        cmd += worker_command("capture", "--root", str(self.root))
         subprocess.run(cmd, check=True, capture_output=True, text=True, timeout=10)
         for _ in range(150):
             # FLAC/segment output can buffer its first block, especially silence.
@@ -273,17 +271,12 @@ class Guard:
             self.root,
             generation,
             os.environ.get("DISPLAY", ":99"),
-            audio_source=self.config.get("audio_source", "scribe.monitor"),
+            audio_source=self.config.get("audio_source", get("audio", "sink") + ".monitor"),
             audio_segment_seconds=self.config.get("audio_segment_seconds", 5),
             segment_seconds=self.config.get("segment_seconds", 10),
         )
         if name == "observer":
-            argv = [
-                sys.executable,
-                str(Path(get("paths", "root")) / "browser_evidence.py"),
-                "--root",
-                str(self.root),
-            ]
+            argv = worker_command("observe", "--root", str(self.root))
         else:
             argv = options[name]
         log = open(self.root / f"{name}-{generation}.log", "ab")

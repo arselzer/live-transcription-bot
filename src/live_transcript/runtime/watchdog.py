@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
 """Hermes watchdog: bounded, session-scoped repairs; unknown is never dead."""
 
+from live_transcript.worker import guest_command
+
 import argparse
 import fcntl
 import hashlib
 import json
 import os
+from live_transcript.worker import command as worker_command
+from live_transcript.runtime.launcher import (
+    command as launch_command,
+    environment as launch_environment,
+)
 from pathlib import Path
 import shlex
 import socket
@@ -34,7 +41,7 @@ def probe(token):
             "-o",
             "ServerAliveCountMax=2",
             VM,
-            shlex.join(["python3", get("vm", "home") + "/meeting_session.py", "--status", token]),
+            shlex.join(guest_command("session", "--status", token)),
         ],
         capture_output=True,
         text=True,
@@ -171,16 +178,7 @@ def rejoin(meeting, state, now):
             "-o",
             "ConnectTimeout=5",
             VM,
-            shlex.join(
-                [
-                    "python3",
-                    get("vm", "home") + "/meeting_session.py",
-                    "--stop",
-                    token,
-                    "--reason",
-                    "recovery",
-                ]
-            ),
+            shlex.join(guest_command("session", "--stop", token, "--reason", "recovery")),
         ],
         capture_output=True,
         text=True,
@@ -193,8 +191,8 @@ def rejoin(meeting, state, now):
     )
     with open(str(Path(get("paths", "logs")) / "rejoin.log"), "ab") as log:
         proc = subprocess.Popen(
-            [str(Path(get("paths", "root")) / "scribe_run.sh"), meeting["url"], *args],
-            env=env,
+            launch_command(meeting["url"], *args),
+            env=launch_environment(env),
             stdin=subprocess.DEVNULL,
             stdout=log,
             stderr=log,
@@ -228,11 +226,7 @@ def queue_recovery(remote, token):
             "--unit=live-transcript-recovery-" + token,
             "--property=Restart=on-failure",
             "--property=RestartSec=30s",
-            "python3",
-            str(Path(get("paths", "root")) / "recovery_worker.py"),
-            VM,
-            wav,
-            token,
+            *worker_command("recover", VM, wav, token),
         ],
         capture_output=True,
         timeout=5,

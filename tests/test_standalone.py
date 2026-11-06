@@ -192,7 +192,7 @@ class RecoveryCheckpointTests(unittest.TestCase):
             result = recovery_worker.recover_once("vm", "/guest/fixture.wav", "test", self.root)
         self.assertEqual(result["status"], "complete")
         self.assertEqual(run.call_count, 1)
-        self.assertIn("postprocess.sh", run.call_args.args[0][0])
+        self.assertIn("process", run.call_args.args[0])
 
     def test_postprocess_oserror_is_bounded_and_preserves_recording(self):
         with (

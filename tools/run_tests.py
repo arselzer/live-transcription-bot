@@ -28,7 +28,8 @@ def main():
         clean = {
             key: value
             for key, value in os.environ.items()
-            if not key.startswith(("CAPTION_", "LT_", "LIVE_TRANSCRIPT_")) and key != "SCRIBE_DIR"
+            if not key.startswith(("CAPTION_", "LT_", "LIVE_TRANSCRIPT_"))
+            and key != "LIVE_TRANSCRIPT_HOME"
         }
         env = dict(
             clean,

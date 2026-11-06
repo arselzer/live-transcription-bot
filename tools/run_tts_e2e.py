@@ -4,6 +4,8 @@ Only use for an explicitly authorized test meeting. Audio Test joins temporarily
 Writes observed captions, word-error results and a round-trip voice check.
 """
 
+from live_transcript.worker import guest_command, command as worker_command
+
 import json
 from pathlib import Path
 from live_transcript.core.config import get
@@ -13,7 +15,6 @@ import re
 import shlex
 import socket
 import subprocess
-import sys
 import threading
 import time
 
@@ -35,14 +36,28 @@ def errors(reference, hypothesis):
     return dict(reference_words=len(a), edits=row[-1], word_error_rate=row[-1] / max(1, len(a)))
 
 
+def deploy_test_bundle():
+    from live_transcript.runtime.deployment import build_bundle
+    import tempfile
+
+    with tempfile.TemporaryDirectory(prefix="meeting-test-tools-") as directory:
+        bundle = Path(directory) / "live-transcript-test.pyz"
+        build_bundle(bundle, with_test_tools=True)
+        target = get("vm", "ssh") + ":" + get("vm", "home") + "/live-transcript-test.pyz"
+        subprocess.run(["scp", "-q", str(bundle), target], check=True, timeout=30)
+
+
 def main():
+    deploy_test_bundle()
     from live_transcript.transcription.store import CaptionStore
 
     meeting = json.loads((Path(get("paths", "logs")) / "current_meeting.json").read_text())
     if meeting.get("status") != "active":
         raise SystemExit("Join Live Transcript into an authorized test meeting first")
     join_log = Path(
-        meeting.get("control_log", f"/tmp/scribe_join.{meeting['pid']}.log")
+        meeting.get(
+            "control_log", str(Path(get("paths", "logs")) / ("join-" + meeting["run_id"] + ".log"))
+        )
     ).read_text()
     session = Path(re.findall(r"RECORDING to (\S+)", join_log)[-1]).stem
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -90,9 +105,7 @@ def main():
                 "-a",
                 "-s",
                 "-screen 0 1280x800x24",
-                "python3",
-                "-u",
-                get("vm", "home") + "/tts_test_bot.py",
+                *guest_command("test-sender", test=True),
                 meeting["url"],
             ]
         )
@@ -112,13 +125,12 @@ def main():
                 print(line.rstrip(), flush=True)
                 if "TTS TEST COMPLETE" in line:
                     reply = subprocess.check_output(
-                        [
-                            sys.executable,
-                            str(Path(get("paths", "root")) / "voice_control.py"),
+                        worker_command(
+                            "tts",
                             "--lang",
                             "en",
                             "The test is complete. We will keep the transcript in the original language, show summaries during pauses, and use a compact status line.",
-                        ],
+                        ),
                         text=True,
                     )
                     voice_id = reply.strip().split()[-1]

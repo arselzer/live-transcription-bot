@@ -15,12 +15,15 @@ from live_transcript.core.config import get
 def begin(url, args, directory=None):
     options, minutes = rejoin_options(args)
     from live_transcript.providers.proton import is_proton_url, validate_url
+
     if is_proton_url(url):
         validate_url(url)
     else:
         from live_transcript.providers.google_meet import is_google_url
+
         if is_google_url(url):
             from live_transcript.providers.google_meet import validate_url as validate_google
+
             validate_google(url)
         else:
             zoom_invitation(url)

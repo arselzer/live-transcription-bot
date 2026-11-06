@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 from playwright.sync_api import sync_playwright
-from live_transcript.runtime.entry import joined_controls
+from live_transcript.providers.zoom import joined_controls
 from live_transcript.providers.admission import inspect_zoom, save_failure
 
 

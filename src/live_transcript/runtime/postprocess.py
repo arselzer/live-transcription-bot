@@ -2,7 +2,7 @@
 """Generate quality-checked full-model transcripts, notes and captioned video.
 
 Recognition and retries retain original media and prior outputs on failure.
-Usage: postprocess.py RECORDING.wav
+Usage: live-transcript process RECORDING.wav
 """
 
 import json, os, sys, urllib.request
@@ -16,7 +16,7 @@ from live_transcript.runtime.processing import publish as publish_status, atomic
 def _process(argv=None):
     arguments = sys.argv[1:] if argv is None else list(argv)
     if len(arguments) != 1:
-        raise SystemExit("Usage: postprocess.py RECORDING.wav")
+        raise SystemExit("Usage: live-transcript process RECORDING.wav")
     WAV = arguments[0]
     from pathlib import Path
     import fcntl
@@ -357,5 +357,49 @@ def main(argv=None):
         raise
 
 
+def run_logged(argv=None):
+    from contextlib import redirect_stdout, redirect_stderr
+    from pathlib import Path
+    from live_transcript.core.files import atomic_text
+
+    arguments = sys.argv[1:] if argv is None else list(argv)
+    if len(arguments) != 1:
+        raise SystemExit("Usage: live-transcript process RECORDING.wav")
+    wav = Path(arguments[0])
+    logs = Path(get("paths", "logs"))
+    logs.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(
+        logs / ("post-" + wav.stem + ".log"),
+        os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW,
+        0o600,
+    )
+    with os.fdopen(descriptor, "a") as log:
+        os.fchmod(log.fileno(), 0o600)
+        with redirect_stdout(log), redirect_stderr(log):
+            main(arguments)
+            vault = get("paths", "vault")
+            if vault:
+                try:
+                    if not Path(vault).is_dir():
+                        raise OSError("Configured notes vault is unavailable")
+                    destination = Path(vault) / "meetings"
+                    destination.mkdir(parents=True, exist_ok=True, mode=0o700)
+                    atomic_text(
+                        destination / wav.with_suffix(".md").name,
+                        wav.with_suffix(".md").read_text(),
+                    )
+                except OSError as exc:
+                    # The recording's finished artifacts are authoritative. An
+                    # optional notes mirror must not turn success into a retry.
+                    print("Notes copy failed:", type(exc).__name__, flush=True)
+                    state = json.loads(wav.with_suffix(".postprocess-status.json").read_text())
+                    state.update(
+                        status="complete_with_warnings",
+                        vault=dict(status="failed", error=type(exc).__name__),
+                    )
+                    publish_status(str(wav), state)
+    print("Processing finished:", wav.with_suffix(".md"))
+
+
 if __name__ == "__main__":
-    main()
+    run_logged()

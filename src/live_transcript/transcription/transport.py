@@ -3,6 +3,8 @@
 Capture generations use separate directories; unsent audio survives restarts.
 """
 
+from live_transcript.worker import command as worker_command
+
 import fcntl
 import io
 import json
@@ -23,7 +25,7 @@ HOST = os.environ.get("CAPTION_HOST", get("caption", "host"))
 PORT = int(os.environ.get("CAPTION_PORT", str(get("caption", "port"))))
 SESSION = sys.argv[1] if len(sys.argv) > 1 else "m"
 NO_VIDEO = "--no-video" in sys.argv
-HOME = Path(os.environ.get("SCRIBE_DIR", get("vm", "home")))
+HOME = Path(os.environ.get("LIVE_TRANSCRIPT_HOME", get("vm", "home")))
 CAP_TSV = HOME / "captions.tsv"
 SCOPED_SPK_LOG = HOME / "rec" / (SESSION + ".speakers.jsonl")
 SPK_LOG = HOME / "rec/speakers.jsonl"
@@ -209,7 +211,7 @@ def start_capture():
             "-f",
             "pulse",
             "-i",
-            os.environ.get("CAPTION_AUDIO_SOURCE", "scribe.monitor"),
+            os.environ.get("CAPTION_AUDIO_SOURCE", get("audio", "sink") + ".monitor"),
             "-ac",
             "1",
             "-ar",
@@ -228,7 +230,7 @@ def start_capture():
 
 
 def start_renderer():
-    return spawn([sys.executable, str(HOME / "caption_render.py")], "/tmp/caprender.log")
+    return spawn(worker_command("render"), "/tmp/caprender.log")
 
 
 def supervisor():

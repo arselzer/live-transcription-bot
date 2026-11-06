@@ -1,12 +1,13 @@
 # Copy to ~/.config/live-transcript/config.toml or use --config FILE.
 # Paths below are examples. Model files/voices and a prepared VM are prerequisites.
 [paths]
-root = "~/live-transcription-bot"
+root = "~/.local/share/live-transcript"
 state = "~/.local/state/live-transcript"
 logs = "~/.local/state/live-transcript/logs"
 recordings = "~/.local/share/live-transcript/recordings"
 safety_copies = "~/.local/share/live-transcript/safety-copies"
-# Other runtime paths derive from root unless explicitly set.
+# Workspace/model paths derive from root unless explicitly set.
+# tts = "/path/to/private/tts-assets"
 # recordings = "/srv/live-transcript/recordings"
 # archive_destination = "/mnt/archive/live-transcript"
 # archive_mount = "/mnt/archive"
@@ -15,7 +16,7 @@ safety_copies = "~/.local/share/live-transcript/safety-copies"
 # whisper_cli = "~/whisper.cpp/build/bin/whisper-cli"
 # glossary = "/path/to/private/glossary.txt"
 # diarization_model = "/path/to/local/ecapa"
-# postprocess_python = "/usr/bin/python3"
+# postprocess_python = "/path/to/installed/venv/bin/python"
 
 [vm]
 ssh = "transcript@192.0.2.20"
@@ -23,6 +24,15 @@ ip = "192.0.2.20"
 name = "transcript"
 home = "/home/transcript"
 manage_libvirt = false
+
+[audio]
+sink = "transcript"
+
+[browser]
+google_mode = "cdp"
+google_private = true
+# Optional absolute executable path inside the VM; default is Playwright's Chromium.
+# google_executable = "/path/to/google-chrome"
 
 [caption]
 host = "192.0.2.1" # Host IP reachable from the VM; bind only on a trusted interface.

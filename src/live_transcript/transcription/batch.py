@@ -71,6 +71,7 @@ def voiced_offset(source, from_s, to_s, floor=300):
     """First moment at or after from_s where audio clears a noise floor.
     Auto language detection on silence is arbitrary: callers skip dead air."""
     import array
+
     with wave.open(str(source)) as w:
         rate = w.getframerate()
         step = max(1, int(rate * 0.1))
@@ -93,6 +94,7 @@ def voiced_pieces(source, from_s, to_s, floor=300, cap=8.0):
     Concatenated, these give language detection a window of actual speech.
     The cap keeps the decision anchored to the chunk's opening language."""
     import array
+
     pieces = []
     with wave.open(str(source)) as w:
         rate = w.getframerate()
@@ -146,7 +148,15 @@ def detect_language(path, runner, env, ffmpeg, from_s, to_s, scratch):
     try:
         runner(args, check=True, capture_output=True, text=True, timeout=120)
         result = runner(
-            [get("paths", "whisper_cli"), "-m", get("paths", "model"), "-l", "auto", "-dl", str(det)],
+            [
+                get("paths", "whisper_cli"),
+                "-m",
+                get("paths", "model"),
+                "-l",
+                "auto",
+                "-dl",
+                str(det),
+            ],
             check=True,
             capture_output=True,
             text=True,
@@ -237,7 +247,13 @@ def transcribe_wav(path, env=None, runner=None, progress=None):
             )
             # Detect each independent chunk: a German opening must not lock
             # later English speech to German (or the reverse).
-            command = [get("paths", "whisper_cli"), "-m", get("paths", "model"), "-l", language or "auto"]
+            command = [
+                get("paths", "whisper_cli"),
+                "-m",
+                get("paths", "model"),
+                "-l",
+                language or "auto",
+            ]
             if glossary:
                 command += ["--prompt", glossary]
             vad = get("paths", "vad")

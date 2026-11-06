@@ -11,6 +11,7 @@ import sys
 import time
 from live_transcript.capture.guard import atomic_json
 from live_transcript.core.config import get
+from live_transcript.worker import command as worker_command
 
 
 def recover_once(vm, wav, token, directory=None, do_postprocess=True):
@@ -44,12 +45,7 @@ def recover_once(vm, wav, token, directory=None, do_postprocess=True):
             atomic_json(state_file, state)
             try:
                 result = subprocess.run(
-                    [
-                        sys.executable,
-                        str(Path(get("paths", "root")) / "pull_recording.py"),
-                        vm,
-                        wav,
-                    ],
+                    worker_command("pull", vm, wav),
                     capture_output=True,
                     text=True,
                     timeout=1800,
@@ -79,7 +75,7 @@ def recover_once(vm, wav, token, directory=None, do_postprocess=True):
         atomic_json(state_file, state)
         try:
             result = subprocess.run(
-                [str(Path(get("paths", "root")) / "postprocess.sh"), str(destination)],
+                worker_command("process", destination, python=get("paths", "postprocess_python")),
                 capture_output=True,
                 text=True,
                 timeout=7200,
@@ -101,6 +97,41 @@ def recover_once(vm, wav, token, directory=None, do_postprocess=True):
     state.update(status="retrieval_failed", utc=time.time())
     atomic_json(state_file, state)
     return state
+
+
+def recent_jobs(limit=20):
+    """Read local checkpoints only; listing jobs never touches archive storage."""
+    if not 1 <= limit <= 100:
+        raise ValueError("Job limit must be between 1 and 100")
+    logs = Path(get("paths", "logs"))
+    rows = []
+    for pattern, kind in (("recovery-*.json", "retrieval"), ("postprocess-*.json", "processing")):
+        for path in logs.glob(pattern):
+            try:
+                item = json.loads(path.read_text())
+                if not isinstance(item, dict):
+                    continue
+                updated = float(item.get("utc", item.get("created", 0)))
+                rows.append(
+                    dict(
+                        kind=kind,
+                        job=path.stem,
+                        status=item.get("status", "unknown"),
+                        updated=updated,
+                        checkpoint=str(path),
+                    )
+                )
+            except (OSError, ValueError, TypeError):
+                rows.append(
+                    dict(
+                        kind=kind,
+                        job=path.stem,
+                        status="unreadable",
+                        updated=0,
+                        checkpoint=str(path),
+                    )
+                )
+    return sorted(rows, key=lambda row: row["updated"], reverse=True)[:limit]
 
 
 def run(vm, wav, token, directory=None, do_postprocess=True):

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Idempotent PulseAudio/ALSA topology for the Live Transcript bot.
 
-- `scribe` null sink: Zoom's playback lands here; its monitor is recorded/chunked.
+- Configured null sink: Zoom's playback lands here; its monitor is recorded/chunked.
 - Browser mic: snd-dummy (pure software ALSA card) via module-alsa-source.
   It ALWAYS yields buffers (silence), which is exactly what is needed:
     * Chromium refuses PulseAudio *monitor* sources as mics (getUserMedia
@@ -21,14 +21,16 @@ import time
 import os
 import signal
 from pathlib import Path
+from live_transcript.core.config import get
 from live_transcript.runtime.session import assert_idle
+from live_transcript.worker import is_role_process
 
 
 def main():
     _owner = os.environ.get("LT_PREP_OWNER", "")
     _parent_args = Path(f"/proc/{os.getppid()}/cmdline").read_bytes().split(b"\0")
-    _leased_preparation = _owner == str(os.getppid()) and any(
-        arg.rsplit(b"/", 1)[-1] in (b"vm_prepare.py", b"meeting_session.py") for arg in _parent_args
+    _leased_preparation = _owner == str(os.getppid()) and is_role_process(
+        _parent_args, {"prepare", "session"}
     )
     if not _leased_preparation:
         assert_idle()
@@ -153,7 +155,7 @@ def main():
         if "dummy" in card.lower():
             subprocess.run(["pactl", "set-card-profile", card, "off"], capture_output=True)
 
-    # 4) retire stale scribe/botmic/probe sinks and manual alsa modules
+    # 4) retire owned recording/probe sinks and manual ALSA modules
     name, mods = None, {}
     for line in sh("pactl", "list", "sinks").splitlines():
         m = re.match(r"\s*Name: <?([^>\s]+)>?", line)
@@ -163,12 +165,18 @@ def main():
         if m and name:
             mods[name] = m.group(1)
     for sink, mid in mods.items():
-        if sink.startswith(("scribe", "botmic", "probe")):
+        if sink.startswith((get("audio", "sink"), "botmic", "probe")):
             _drop(mid)
     _drop_modules(lambda n: n in ("module-alsa-source", "module-alsa-sink"))
 
     # 5) fresh topology
-    _load(["module-null-sink", "sink_name=scribe", "sink_properties=device.description=ScribeRec"])
+    _load(
+        [
+            "module-null-sink",
+            "sink_name=" + get("audio", "sink"),
+            "sink_properties=device.description=TranscriptAudio",
+        ]
+    )
     srcs = sh("pactl", "list", "short", "sources")
     if "alsa_input.hw_0_0" not in srcs and "snd_dummy" in sh("lsmod"):
         _load(
@@ -179,10 +187,10 @@ def main():
     if mic:
         subprocess.run(["pactl", "set-default-source", mic], capture_output=True)
     # defaults LAST: alsa modules can steal the default slots when loaded
-    subprocess.run(["pactl", "set-default-sink", "scribe"], capture_output=True)
+    subprocess.run(["pactl", "set-default-sink", get("audio", "sink")], capture_output=True)
 
     ok = (
-        "scribe" in sh("pactl", "list", "short", "sinks")
+        get("audio", "sink") in sh("pactl", "list", "short", "sinks")
         and mic
         and mic in sh("pactl", "list", "short", "sources")
     )

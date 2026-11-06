@@ -26,7 +26,7 @@ RUNTIME = None
 # Env kill-switch: COMMIT_ONCE=0 restores the rolling-window path.
 COMMIT_ONCE = os.environ.get("COMMIT_ONCE", str(int(get("caption", "commit_once")))) == "1"
 OVERLAP_S = 2.5
-CAP_FILE = os.environ.get("CAPTION_CAP_FILE", "/tmp/scribe_captions.tsv")
+CAP_FILE = os.environ.get("CAPTION_CAP_FILE", "/tmp/live-transcript-captions.tsv")
 API = get("model", "url")
 WINDOW = 8.0
 RUN_EVERY = get("caption", "run_every")
@@ -587,7 +587,7 @@ def write_caps(session):
         pass
 
 
-TTS_DIR = os.path.join(get("paths", "root"), "tts")
+TTS_DIR = get("paths", "tts")
 TTS_VOICE = {"de": "de_DE-thorsten_medium", "en": "en_US-lessac_medium"}
 
 

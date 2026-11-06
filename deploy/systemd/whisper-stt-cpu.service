@@ -3,8 +3,8 @@ Description=Live Transcript ASR cpu-large
 After=network.target
 StartLimitIntervalSec=0
 [Service]
-WorkingDirectory=%h/live-transcription-bot
-ExecStart=/usr/bin/python3 %h/live-transcription-bot/asr_service.py --device cpu-large
+WorkingDirectory=%h
+ExecStart=%h/live-transcription-bot/.venv/bin/live-transcript serve asr --device cpu-large
 Restart=on-failure
 RestartSec=5
 TimeoutStopSec=20

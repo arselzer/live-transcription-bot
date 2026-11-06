@@ -43,7 +43,7 @@ class SessionTests(unittest.TestCase):
             prefix = Path(d) / "session-test"
             with (
                 patch.object(session, "paths", return_value=prefix),
-                patch.dict("os.environ", {"LT_MEETING_PROGRAM": "fixture"}),
+                patch.dict("os.environ", {"LT_TEST_ROLE": "fixture-session"}),
                 patch.object(
                     session.subprocess, "Popen", side_effect=RuntimeError("browser failed")
                 ),
@@ -65,6 +65,17 @@ class SessionTests(unittest.TestCase):
             ):
                 self.assertEqual(session.follow("test", ["private-invitation"]), 0)
             run.assert_not_called()
+
+    def test_browser_cleanup_matches_each_real_provider_profile(self):
+        from live_transcript.runtime import prepare
+
+        for profile in ("chrome-prof", "chrome-proton-prof", "chrome-meet-prof"):
+            args = [
+                b"/usr/bin/chromium",
+                ("--user-data-dir=" + str(prepare.HOME / profile)).encode(),
+            ]
+            self.assertTrue(prepare.owned_process(args), profile)
+        self.assertFalse(prepare.owned_process([b"chromium", b"--user-data-dir=/tmp/unrelated"]))
 
     def test_session_token_rejects_shell_and_path_characters(self):
         for token in ("../x", "x;command", "x/y", "", "x" * 81):

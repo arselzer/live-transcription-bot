@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Run the browser meeting independently of the SSH log-following connection."""
 
+from live_transcript.worker import command as worker_command, is_role_process
+
 import fcntl
 import json
 import os
@@ -58,11 +60,8 @@ def assert_idle():
                 "A detached meeting service is still active; refusing to reset audio/browser"
             )
         for proc in Path("/proc").iterdir():
-            if proc.name.isdigit() and any(
-                arg in (str(HOME / "join_meeting.py").encode(), b"join_meeting.py")
-                for arg in process_args(proc.name)
-            ):
-                raise RuntimeError("A legacy meeting process is still active")
+            if proc.name.isdigit() and is_role_process(process_args(proc.name), {"join"}):
+                raise RuntimeError("A meeting worker is still active")
 
 
 def status(token):
@@ -178,7 +177,7 @@ def worker(token, args):
     stopping = False
 
     def graceful_child_stop():
-        program = os.environ.get("LT_MEETING_PROGRAM", str(HOME / "join_meeting.py")).encode()
+        role = os.environ.get("LT_TEST_ROLE") or "join"
         targets = []
         for entry in Path("/proc").iterdir():
             if not entry.name.isdigit():
@@ -188,7 +187,7 @@ def worker(token, args):
                 if (
                     child_args
                     and child_args[0].rsplit(b"/", 1)[-1].startswith(b"python")
-                    and program in child_args
+                    and is_role_process(child_args, {role})
                     and os.getpgid(int(entry.name)) == proc.pid
                 ):
                     targets.append(int(entry.name))
@@ -224,7 +223,10 @@ def worker(token, args):
         for sig in (signal.SIGTERM, signal.SIGINT):
             old_handlers[sig] = signal.getsignal(sig)
             signal.signal(sig, stop)
-        if not os.environ.get("LT_MEETING_PROGRAM"):
+        test_role = os.environ.get("LT_TEST_ROLE")
+        if test_role and test_role not in ("fixture-session", "fixture-stop"):
+            raise ValueError("Unsupported fixture role")
+        if not test_role:
             from live_transcript.runtime.prepare import main as prepare_vm
 
             prepare_vm(lease_owned=True)
@@ -238,9 +240,7 @@ def worker(token, args):
                 "-a",
                 "-s",
                 "-screen 0 1280x800x24",
-                sys.executable,
-                "-u",
-                os.environ.get("LT_MEETING_PROGRAM", str(HOME / "join_meeting.py")),
+                *worker_command(test_role or "join"),
                 *args,
             ],
             start_new_session=True,
@@ -300,20 +300,13 @@ def follow(token, args):
             for key in (
                 "PULSE_SERVER",
                 "XDG_RUNTIME_DIR",
-                "LT_MEETING_PROGRAM",
+                "LT_TEST_ROLE",
                 "LIVE_TRANSCRIPT_CONFIG",
                 "LT_DEADLINE",
             ):
                 if key in os.environ:
                     cmd.append(f"--setenv={key}={os.environ[key]}")
-            cmd += [
-                sys.executable,
-                "-u",
-                str(HOME / "meeting_session.py"),
-                "--worker",
-                token,
-                *args,
-            ]
+            cmd += worker_command("session", "--worker", token, *args)
             subprocess.run(cmd, check=True, capture_output=True, timeout=10)
             atomic_json(started_file, dict(utc=time.time(), unit=unit, identity=identity))
     offset = 0

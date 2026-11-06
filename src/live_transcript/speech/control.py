@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Explicitly speak through Live Transcript: voice_control.py --lang en 'Hello'."""
+"""Explicitly speak through Live Transcript: live-transcript say --lang en 'Hello'."""
 
 import argparse
 import json
@@ -22,7 +22,11 @@ def main():
     meeting = json.loads((Path(get("paths", "logs")) / "current_meeting.json").read_text())
     if meeting.get("status") not in ("active", "control_lost"):
         raise SystemExit("No active meeting")
-    log = Path(meeting.get("control_log", f"/tmp/scribe_join.{meeting['pid']}.log")).read_text()
+    log = Path(
+        meeting.get(
+            "control_log", str(Path(get("paths", "logs")) / ("join-" + meeting["run_id"] + ".log"))
+        )
+    ).read_text()
     paths = re.findall(r"RECORDING to (\S+)", log)
     if not paths:
         raise SystemExit("The bot has not joined yet")

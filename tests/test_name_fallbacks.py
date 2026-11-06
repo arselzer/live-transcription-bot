@@ -24,7 +24,7 @@ class NameFallbackTests(unittest.TestCase):
             return "joined"
 
         args = argv or [
-            "join_meeting.py",
+            "live-transcript join",
             "https://zoom.us/j/12345678901?pwd=secret",
             "--name=Live Transcript",
             "--passcode",
@@ -79,7 +79,7 @@ class NameFallbackTests(unittest.TestCase):
         _, names, _, _ = self.run_sequence(
             ["zoom_automation_blocked", None],
             [
-                "join_meeting.py",
+                "live-transcript join",
                 "https://zoom.us/j/12345678901",
                 "--name",
                 "Example User (Transcript)",
@@ -91,7 +91,7 @@ class NameFallbackTests(unittest.TestCase):
 
     def test_plain_systemexit_is_not_treated_as_an_automation_block(self):
         with (
-            patch.object(zoom.sys, "argv", ["join_meeting.py", "12345678901"]),
+            patch.object(zoom.sys, "argv", ["live-transcript join", "12345678901"]),
             patch.object(zoom, "main", side_effect=SystemExit(4)) as main,
         ):
             with self.assertRaises(SystemExit):
@@ -108,7 +108,7 @@ class NameFallbackTests(unittest.TestCase):
 
     def test_budget_expiry_does_not_start_another_browser(self):
         with (
-            patch.object(zoom.sys, "argv", ["join_meeting.py", "12345678901"]),
+            patch.object(zoom.sys, "argv", ["live-transcript join", "12345678901"]),
             patch.dict(os.environ, {"LT_DEADLINE": "1"}),
             patch.object(zoom, "main") as main,
         ):

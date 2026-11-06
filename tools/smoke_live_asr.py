@@ -14,7 +14,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
-import sys
+from live_transcript.worker import command as worker_command
 import threading
 import time
 import urllib.error
@@ -124,7 +124,7 @@ def main():
     session = "isolated-" + a.mode
     with (output / "daemon.log").open("wb") as log:
         proc = subprocess.Popen(
-            [sys.executable, str(Path(get("paths", "root")) / "captiond.py")],
+            worker_command("captions"),
             env=env,
             stdout=log,
             stderr=log,

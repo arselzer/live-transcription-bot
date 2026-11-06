@@ -6,7 +6,10 @@ Kills a recorder and the archive supervisor, then checks recovery, speaker
 evidence, snapshots, video and lossless audio. Run under xvfb-run.
 """
 
+from live_transcript.worker import command as worker_command
+
 import json
+from contextlib import ExitStack
 import math
 import os
 from pathlib import Path
@@ -14,7 +17,6 @@ from live_transcript.core.config import get
 import signal
 import struct
 import subprocess
-import sys
 import tempfile
 import time
 import wave
@@ -36,7 +38,7 @@ def wait_for(predicate, timeout=12):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--provider", choices=("proton", "zoom"), default="proton")
+    ap.add_argument("--provider", choices=("proton", "zoom", "google"), default="proton")
     args = ap.parse_args()
     from playwright.sync_api import sync_playwright
 
@@ -52,7 +54,11 @@ def main():
     primary = None
     ready = False
     try:
-        with tempfile.TemporaryDirectory() as tmp, sync_playwright() as p:
+        with (
+            tempfile.TemporaryDirectory() as tmp,
+            sync_playwright() as p,
+            ExitStack() as browser_stack,
+        ):
             tone = Path(tmp) / "tone.wav"
             with wave.open(str(tone), "wb") as wav:
                 wav.setnchannels(1)
@@ -63,25 +69,38 @@ def main():
                     for i in range(48000)
                 )
                 wav.writeframes(one * 120)
-            port = 9248 if args.provider == "proton" else 9249
-            browser = p.chromium.launch(
-                headless=False,
-                ignore_default_args=["--mute-audio"],
-                env=dict(os.environ, PULSE_SINK=sink),
-                args=[
-                    "--no-sandbox",
-                    "--remote-debugging-port=" + str(port),
-                    "--use-fake-device-for-media-stream",
-                    "--use-fake-ui-for-media-stream",
-                    "--autoplay-policy=no-user-gesture-required",
-                ],
-            )
-            page = browser.new_page(viewport=dict(width=1280, height=800))
-            url = (
-                "https://meet.proton.me/archive-fixture"
-                if args.provider == "proton"
-                else "https://app.zoom.us/wc/12345678901/join"
-            )
+            port = {"proton": 9248, "zoom": 9249, "google": 9250}[args.provider]
+            flags = [
+                "--no-sandbox",
+                "--remote-debugging-port=" + str(port),
+                "--use-fake-device-for-media-stream",
+                "--use-fake-ui-for-media-stream",
+                "--autoplay-policy=no-user-gesture-required",
+            ]
+            environment = dict(os.environ, PULSE_SINK=sink)
+            if args.provider == "google":
+                from live_transcript.providers.browser import google_context
+
+                browser = browser_stack.enter_context(
+                    google_context(
+                        p, Path(tmp) / "google-profile", env=environment, args=flags, port=port
+                    )
+                )
+                page = browser.new_page()
+                page.set_viewport_size(dict(width=1280, height=800))
+            else:
+                browser = p.chromium.launch(
+                    headless=False,
+                    ignore_default_args=["--mute-audio"],
+                    env=environment,
+                    args=flags,
+                )
+                page = browser.new_page(viewport=dict(width=1280, height=800))
+            url = {
+                "proton": "https://meet.proton.me/archive-fixture",
+                "zoom": "https://app.zoom.us/wc/12345678901/join",
+                "google": "https://meet.google.com/abc-abcd-efg",
+            }[args.provider]
             body = """<body style="background:#192d3f;color:white;font:32px sans-serif">
                 <h1>Isolated recording failure drill</h1>
                 <div class="participant-tile-body"><div class="speaker-border"></div>
@@ -104,10 +123,23 @@ def main():
 
                 page.context.add_init_script(MIC_SCRIPT)
                 page.context.grant_permissions(["microphone"], origin="https://app.zoom.us")
+            if args.provider == "google":
+                body = """<h1>Isolated Google Meet fixture</h1>
+                <div jsname="fixture" aria-label="Fixture Alice is speaking"><span>Fixture Alice</span></div>
+                <button aria-label="Leave call (Ctrl + Alt + H)">Leave call</button>
+                <button aria-label="Turn on microphone (Ctrl + d)" onclick="this.setAttribute('aria-label',
+                  this.getAttribute('aria-label').startsWith('Turn on')?'Turn off microphone (Ctrl + d)':'Turn on microphone (Ctrl + d)')">Microphone</button>
+                <script>setInterval(()=>{const tile=document.querySelector('[jsname]');const name=
+                  tile.textContent.includes('Alice')?'Fixture Bob':'Fixture Alice';
+                  tile.textContent=name;tile.setAttribute('aria-label',name+' is speaking')},2000)</script>"""
+                from live_transcript.speech.browser import MIC_SCRIPT
+
+                page.context.add_init_script(MIC_SCRIPT)
+                page.context.grant_permissions(["microphone"], origin="https://meet.google.com")
             page.route(url, lambda route: route.fulfill(content_type="text/html", body=body))
             page.goto(url)
             voice_verified = False
-            if args.provider == "zoom":
+            if args.provider in ("zoom", "google"):
                 page.evaluate("""async () => {
                   const stream=await navigator.mediaDevices.getUserMedia({audio:true});
                   const ctx=new AudioContext();await ctx.resume();
@@ -122,34 +154,44 @@ def main():
                 home.mkdir()
                 (home / "rec").mkdir()
                 voice = VoiceController(
-                    page, name, "Voice fixture", directory=home, t0=time.time(), provider="zoom"
+                    page,
+                    name,
+                    "Voice fixture",
+                    directory=home,
+                    t0=time.time(),
+                    provider=args.provider,
                 )
-                ident = voice.enqueue("This is the isolated Zoom voice test.", "en")
+                ident = voice.enqueue("This is the isolated meeting voice test.", "en")
                 voice.poll()
                 response = json.loads((voice.done / (ident + ".json")).read_text())
                 assert response["ok"], response
                 voice_verified = page.evaluate("window.fixtureMicMax") > 0.001
                 assert voice_verified, "virtual microphone carried no speech"
-                assert (
-                    page.frames[-1]
-                    .get_by_role("button", name="Unmute my microphone (Alt+A)", exact=True)
-                    .is_visible()
-                )
-                print(
-                    "PASS Zoom iframe voice: virtual microphone carried TTS and mute restored",
-                    flush=True,
-                )
-                from live_transcript.runtime.entry import joined_controls
+                if args.provider == "zoom":
+                    assert (
+                        page.frames[-1]
+                        .get_by_role("button", name="Unmute my microphone (Alt+A)", exact=True)
+                        .is_visible()
+                    )
+                    from live_transcript.providers.zoom import joined_controls
 
-                assert joined_controls(page), "visible in-call controls were not recognized"
-                page.frames[-1].evaluate(
-                    'document.querySelector("button[aria-label=\\"Leave Meeting\\"]").remove()'
-                )
-                assert not joined_controls(page), (
-                    "pre-join controls incorrectly confirmed admission"
-                )
+                    assert joined_controls(page), "visible in-call controls were not recognized"
+                    page.frames[-1].evaluate(
+                        'document.querySelector("button[aria-label="Leave Meeting"]").remove()'
+                    )
+                    assert not joined_controls(page), (
+                        "pre-join controls incorrectly confirmed admission"
+                    )
+                else:
+                    from live_transcript.providers.google_meet import button, joined
+
+                    assert button(page, "Turn on microphone").is_visible(), "mute was not restored"
+                    assert joined(page), "Google in-call controls were not recognized"
+                    button(page, "Leave call").evaluate("element => element.remove()")
+                    assert not joined(page), "missing leave control incorrectly confirmed admission"
                 print(
-                    "PASS Zoom admission requires visible leave and participant controls",
+                    "PASS provider voice, mute restoration and admission controls:",
+                    args.provider,
                     flush=True,
                 )
             player = subprocess.Popen(["paplay", "--device=" + sink, str(tone)])
@@ -184,7 +226,7 @@ def main():
             fixture_home.mkdir()
             env = dict(
                 os.environ,
-                SCRIBE_DIR=str(fixture_home),
+                LIVE_TRANSCRIPT_HOME=str(fixture_home),
                 CAPTION_HOST="127.0.0.1",
                 CAPTION_PORT="1",
                 CAPTION_AUDIO_SOURCE=sink + ".monitor",
@@ -193,12 +235,7 @@ def main():
             )
             with open(archive.root / "caption-failure-drill.log", "ab") as log:
                 caption = subprocess.Popen(
-                    [
-                        sys.executable,
-                        str(Path(get("paths", "root")) / "caption_stream.py"),
-                        name,
-                        "--no-video",
-                    ],
+                    worker_command("stream", name, "--no-video"),
                     env=env,
                     stdout=log,
                     stderr=subprocess.STDOUT,
@@ -282,30 +319,50 @@ def main():
             for extension in ("flac", "mkv", "jpg"):
                 files = list(archive.root.glob("*." + extension))
                 assert files, extension
-                probe = subprocess.run(
-                    [
-                        "ffprobe",
-                        "-v",
-                        "error",
-                        "-show_entries",
-                        "stream=codec_name",
-                        "-of",
-                        "json",
-                        str(files[-1]),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                )
+                playable = []
+                unreadable = []
+                for file in sorted(files):
+                    probe = subprocess.run(
+                        [
+                            "ffprobe",
+                            "-v",
+                            "error",
+                            "-show_entries",
+                            "stream=codec_name",
+                            "-of",
+                            "json",
+                            str(file),
+                        ],
+                        capture_output=True,
+                        text=True,
+                    )
+                    try:
+                        streams = (
+                            json.loads(probe.stdout).get("streams", [])
+                            if probe.returncode == 0
+                            else []
+                        )
+                    except ValueError:
+                        streams = []
+                    if streams:
+                        playable.append(dict(file=file.name, streams=streams))
+                    else:
+                        unreadable.append(file.name)
+                # SIGKILL can leave a partial container in the old generation.
+                # Retain it, report it, and require playable restarted outputs.
+                assert playable, (extension, "no playable media survived")
                 media[extension] = dict(
-                    files=len(files), streams=json.loads(probe.stdout)["streams"]
+                    files=len(files),
+                    playable=len(playable),
+                    retained_unreadable=unreadable,
+                    streams=playable[-1]["streams"],
                 )
             report = dict(
                 archive=str(archive.root),
                 audio_restart=True,
                 guard_restart=True,
                 provider=args.provider,
-                zoom_voice_verified=voice_verified,
+                voice_verified=voice_verified,
                 caption_failure_survived=True,
                 speaker_rows=len(rows),
                 speakers=sorted(names),

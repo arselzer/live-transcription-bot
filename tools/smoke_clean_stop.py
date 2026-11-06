@@ -2,8 +2,11 @@
 """Exercise real service shutdown and verify recorder flush without a meeting."""
 
 import json
+import shlex
 from pathlib import Path
 from live_transcript.core.config import get
+from live_transcript.worker import guest_command
+from tools.run_tts_e2e import deploy_test_bundle
 
 guest_home = get("vm", "home")
 import subprocess
@@ -22,13 +25,14 @@ def ssh(command, timeout=15):
 
 
 def main():
+    deploy_test_bundle()
     Path(get("paths", "logs")).mkdir(parents=True, exist_ok=True)
     token = "clean-stop-" + uuid.uuid4().hex[:10]
-    ssh(f"python3 {guest_home}/meeting_session.py --assert-idle")
+    ssh(shlex.join(guest_command("session", "--assert-idle", test=True)))
     command = (
         "export XDG_RUNTIME_DIR=/run/user/$(id -u) PULSE_SERVER=unix:/run/user/$(id -u)/pulse/native "
-        f"LT_RUN_ID={token} LT_MEETING_PROGRAM={guest_home}/stop_recording_fixture.py; "
-        f"exec python3 -u {guest_home}/meeting_session.py"
+        f"LT_RUN_ID={token} LT_TEST_ROLE=fixture-stop; "
+        "exec " + shlex.join(guest_command("session", test=True))
     )
     log = Path(get("paths", "logs")) / "clean-stop-fixture.log"
     with log.open("wb") as fh:
@@ -46,7 +50,7 @@ def main():
         else:
             raise TimeoutError("stop fixture failed to initialize")
         time.sleep(6)
-        ssh(f"python3 {guest_home}/meeting_session.py --stop " + token, timeout=155)
+        ssh(shlex.join(guest_command("session", "--stop", test=True)) + " " + token, timeout=155)
         code = proc.wait(timeout=10)
         text = log.read_text()
         assert code == 0, text

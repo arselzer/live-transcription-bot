@@ -8,7 +8,7 @@ flowchart LR
   CLI[Standalone CLI] --> Launcher[Host launcher / session owner]
   Hermes[Optional Hermes or calendar] --> Launcher
   Launcher --> Session[Detached guest session]
-  Session --> Browser[Zoom or Proton adapter]
+  Session --> Browser[Zoom / Proton / Google adapter]
   Browser --> Guard[Independent recording service]
   Browser --> UI[Bounded UI recovery]
   Guard --> Raw[FLAC / MKV / snapshots / speaker evidence]
@@ -24,38 +24,44 @@ flowchart LR
 
 ## Package boundaries
 
-Maintained implementation modules live under `src/live_transcript/`; root Python
-files are bootstrap entrypoints. See [the module map](module-map.json) for exact
-locations. Subpackages separate capture, transcription, evidence storage,
-providers, presentation, explicit speech and optional integrations. Shared
-configuration/options live in `core`; lifecycle and orchestration live in
-`runtime`. Imports between implementations use qualified package names.
+The application lives under `src/live_transcript/`. Subpackages separate capture,
+transcription, storage, provider interaction, presentation, speech and optional
+integrations. Shared configuration and file operations live in `core`; lifecycle
+and orchestration live in `runtime`. There are no root-level runtime aliases.
 
-Guest deployment sends the same source package plus bootstrap entrypoints in an
-explicit bundle. The guest `join_meeting.py` entrypoint selects the Zoom adapter;
-the host entrypoint selects the supervised launcher. Capturing child processes
-uses these stable bootstraps rather than executing package files with an
-incorrect Python import path. Browser/audio operator modules and postprocessing
-perform their operations only from explicit `main()` entrypoints.
+Operators and Hermes use `live-transcript`. Local supervised child processes use
+one internal dispatcher, `python -m live_transcript.worker ROLE`. Guest deployment
+builds the same package into `live-transcript.pyz`; its role dispatcher launches
+children from that bundle. This avoids separate copies of launcher scripts and
+works from an installed wheel. The guest still needs external browser/media
+dependencies. Test-only fixtures are included only in an explicitly requested,
+separate development bundle.
+
+The substantive host shell workflow is packaged as `runtime/launch.sh`. It owns
+SSH orchestration and detached backup/retrieval jobs; Python owns configuration,
+state transitions and guest lifecycle. Browser/audio operator modules and final
+processing perform work only from explicit entrypoints.
 
 ## Module boundaries
 
+Paths below are relative to `src/live_transcript/`.
+
 | Responsibility | Owner | Contract |
 | --- | --- | --- |
-| Deployment settings | `runtime_config.py` | Validated TOML; explicit known keys; guest export excludes host-only settings |
-| Human/automation interface | `live_transcript/cli.py` | Start, status, doctor, stop, say, verify, recover, watchdog |
-| Host launch | `scribe_run.sh`, `run_state.py` | One launch lock; private arguments; original deadline; owner-checked updates |
-| Guest lifecycle | `meeting_session.py`, `vm_prepare.py` | Lifetime lease; detached systemd process; token-scoped stop/reconnect |
-| Provider interaction | `join_meeting_vm.py`, `proton_meet.py` | Validate invitation; prove admission; retain capture during optional feature failure |
-| Evidence capture | `recording_guard.py`, `browser_evidence.py` | Independent processes; unique generations; durable events and final hashes |
-| Replication | `archive_mirror.py` | Independent NAS and local lanes; checksum copy; never source deletion |
-| Captions | `caption_stream.py`, `caption_store.py`, `caption_runtime.py`, `captiond.py` | Durable receipt before ACK; one decoder per session; retry without discarding audio |
-| Explicit speech | `browser_voice.py`, `voice_controller.py`, `voice_control.py` | Session-scoped, expiring, at-most-once requests; preserve mute state |
-| Presentation | `caption_render.py`, `meeting_board.py` | 4:3 camera; crop-safe captions; evidence-grounded summary hints |
-| Retrieval | `pull_recording.py`, `recover_recording.py`, `recovery_worker.py` | Verify inventory; preserve originals; report gaps; checkpoint stages |
-| Supervision | `meeting_watchdog.py` | Unknown is not dead; bounded restart; preserve deadline; no global process kills |
-| Admission diagnostics | `admission_diagnostics.py` | Precise terminal reasons; scoped evidence; persisted test join limits |
-| UI recovery | `ui_rescue.py` | Trusted provider frames; visible approved controls; stale-plan rejection; bounded actions |
+| Settings | `core/config.py` | Validated TOML; guest export excludes host-only settings |
+| Operator interface | `cli.py` | Start/status/stop, services, jobs, recovery and integrations |
+| Process dispatch/deployment | `worker.py`, `runtime/deployment.py` | One role registry; reviewed reproducible guest bundle |
+| Host launch | `runtime/launch.sh`, `runtime/state.py` | One launch lock; private arguments; original deadline; owner-checked updates |
+| Guest lifecycle | `runtime/session.py`, `runtime/prepare.py` | Lifetime lease; detached process; token-scoped stop/reconnect |
+| Provider interaction | `providers/` | Validate invitation; prove admission; preserve capture during optional failures |
+| Evidence capture | `capture/guard.py`, `capture/observer.py` | Independent writers; unique generations; durable events and hashes |
+| Replication | `storage/mirror.py` | Independent archive/local lanes; checksum copies; no source deletion |
+| Captions and ASR | `transcription/` | Durable receipt before ACK; one decoder per session; retained audio on failure |
+| Explicit speech | `speech/` | Session-scoped, expiring, at-most-once requests; preserve mute state |
+| Presentation | `presentation/`, `notes/board.py` | 4:3 camera; crop-safe captions; evidence-grounded summary hints |
+| Retrieval/processing | `storage/pull.py`, `storage/worker.py`, `runtime/postprocess.py` | Verify inventory; retain originals; report gaps; checkpoint stages |
+| Supervision | `runtime/watchdog.py` | Unknown is not dead; bounded restart; preserve deadline |
+| Admission/UI rescue | `providers/admission.py`, `providers/rescue.py` | Scoped evidence; trusted controls; stale-plan rejection; bounded actions |
 
 ## Lifecycle
 

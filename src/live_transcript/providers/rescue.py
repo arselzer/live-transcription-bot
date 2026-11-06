@@ -15,6 +15,7 @@ from pathlib import Path
 
 from live_transcript.capture.guard import atomic_json, event
 from live_transcript.core.config import get
+from live_transcript.core.options import provider_origin
 
 SELECTOR = 'button,[role="button"],input[type="button"]'
 CONTROL_JS = """e => ({label:(e.getAttribute('aria-label')||e.getAttribute('title')||
@@ -56,7 +57,7 @@ def permitted_action(label, dialog=False):
 
 
 def validate_candidates(data):
-    if not isinstance(data, dict) or data.get("provider") not in ("zoom", "proton"):
+    if not isinstance(data, dict) or data.get("provider") not in ("zoom", "proton", "google"):
         raise ValueError("invalid UI snapshot")
     controls = data.get("controls")
     if not isinstance(controls, list) or len(controls) > 24:
@@ -160,14 +161,7 @@ class UIRescue:
         candidates = []
         for frame_number, frame in enumerate(page.frames):
             # An embedded third-party document is never a recovery target.
-            from urllib.parse import urlsplit
-
-            host = urlsplit(frame.url).hostname or ""
-            if not (
-                host == "meet.proton.me"
-                if self.provider == "proton"
-                else (host == "zoom.us" or host.endswith(".zoom.us"))
-            ):
+            if not provider_origin(self.provider, frame.url):
                 continue
             try:
                 for item in frame.evaluate(SNAPSHOT_JS):
@@ -210,14 +204,7 @@ class UIRescue:
     def execute(self, page, candidate):
         # Re-resolve the original control. A changed DOM cannot redirect a stale plan.
         frame = page.frames[candidate["frame"]]
-        from urllib.parse import urlsplit
-
-        host = urlsplit(frame.url).hostname or ""
-        if not (
-            host == "meet.proton.me"
-            if self.provider == "proton"
-            else (host == "zoom.us" or host.endswith(".zoom.us"))
-        ):
+        if not provider_origin(self.provider, frame.url):
             return False
         element = frame.locator(SELECTOR).nth(candidate["index"])
         current = element.evaluate(CONTROL_JS, timeout=700)

@@ -6,8 +6,8 @@ import json
 import os
 from pathlib import Path
 import time
-from urllib.parse import urlsplit
 from live_transcript.capture.guard import atomic_json
+from live_transcript.core.options import provider_origin
 
 ZOOM_SPEAKERS_JS = """() => {
  const tiles=[...document.querySelectorAll('[class*=speaker-bar-container__video-frame],'
@@ -24,14 +24,27 @@ ZOOM_SPEAKERS_JS = """() => {
 }"""
 
 
+def speaker_script(provider):
+    if provider == "proton":
+        from live_transcript.providers.proton import SPEAKERS_JS
+
+        return SPEAKERS_JS
+    if provider == "google":
+        from live_transcript.providers.google_meet import SPEAKERS_JS
+
+        return SPEAKERS_JS
+    if provider == "zoom":
+        return ZOOM_SPEAKERS_JS
+    raise ValueError("Unsupported evidence provider")
+
+
 def collect(root):
     from playwright.sync_api import sync_playwright
-    from live_transcript.providers.proton import SPEAKERS_JS
 
     root = Path(root)
     config = json.loads((root / "config.json").read_text())
     started = config["started"]
-    source = SPEAKERS_JS if config["provider"] == "proton" else ZOOM_SPEAKERS_JS
+    source = speaker_script(config["provider"])
     # The scoped sidecar survives later meetings clearing legacy scratch files.
     paths = [root / "speakers.jsonl", root.with_suffix(".speakers.jsonl")]
     last_sync = 0
@@ -47,19 +60,12 @@ def collect(root):
                         pg
                         for ctx in browser.contexts
                         for pg in ctx.pages
-                        if (
-                            (urlsplit(pg.url).hostname == "meet.proton.me")
-                            if config["provider"] == "proton"
-                            else (
-                                (urlsplit(pg.url).hostname or "") == "zoom.us"
-                                or (urlsplit(pg.url).hostname or "").endswith(".zoom.us")
-                            )
-                        )
+                        if provider_origin(config["provider"], pg.url)
                     ]
                     if not pages:
                         raise RuntimeError("meeting page unavailable")
                     page = pages[-1]
-                    frames = [page.main_frame] if config["provider"] == "proton" else page.frames
+                    frames = page.frames if config["provider"] == "zoom" else [page.main_frame]
                     seen = set()
                     for frame in frames:
                         for person in frame.evaluate(source):

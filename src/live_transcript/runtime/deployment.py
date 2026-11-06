@@ -1,63 +1,85 @@
-"""Build a private, reproducible guest bundle from reviewed source only."""
+"""Build the single self-contained Python guest program from reviewed package files."""
 
 import argparse
-import gzip
-import io
-import json
+from importlib import metadata
 from pathlib import Path
-import tarfile
+import zipfile
 
 from live_transcript.core.files import atomic_destination
 from live_transcript.core.source_files import approved_paths, read_source
 
+TEST_TOOLS = (
+    "__init__.py",
+    "tts_test_bot.py",
+    "session_lifecycle_fixture.py",
+    "stop_recording_fixture.py",
+    "smoke_recording_guard.py",
+    "smoke_admission.py",
+)
 
-def build_bundle(root, destination):
-    root = Path(root).resolve()
-    allowed = set(approved_paths(root))
-    mapping = json.loads(read_source(root, "docs/module-map.json"))
-    names = {"_bootstrap.py", "pyproject.toml"}
-    names.update(name + ".py" for name in mapping)
-    names.update(
-        p.relative_to(root).as_posix()
-        for p in (root / "src/live_transcript").rglob("*.py")
-        if "__pycache__" not in p.parts
-    )
-    names.update(p.relative_to(root).as_posix() for p in (root / "tools").glob("*.py"))
-    names.update(("orphan_sweep.sh", "prep_remote.sh", "vm_pa_fix.sh", "vm_stop_joiner.sh"))
-    if names - allowed:
-        raise ValueError("Guest source is outside the reviewed allowlist")
+
+def build_bundle(destination, *, package_dir=None, with_test_tools=False):
+    package = Path(package_dir or Path(__file__).resolve().parents[1]).resolve()
+    checkout = package.parent.parent
+    if (checkout / "PUBLIC_SOURCE_FILES.txt").is_file():
+        allowed = set(approved_paths(checkout))
+        expected = {
+            name
+            for name in allowed
+            if name.startswith("src/live_transcript/") and name.endswith(".py")
+        }
+        actual = {
+            path.relative_to(checkout).as_posix()
+            for path in package.rglob("*.py")
+            if "__pycache__" not in path.parts
+        }
+        if actual != expected:
+            raise ValueError("Guest package contains missing or unreviewed source")
+        members = [
+            (name.removeprefix("src/"), read_source(checkout, name)) for name in sorted(expected)
+        ]
+        if with_test_tools:
+            for filename in TEST_TOOLS:
+                name = "tools/" + filename
+                if name not in allowed:
+                    raise ValueError("Unreviewed test helper")
+                members.append((name, read_source(checkout, name)))
+    else:
+        # A normal installed wheel is already checked by the build backend. Its
+        # RECORD is the source inventory; unrelated files never enter the bundle.
+        if with_test_tools:
+            raise ValueError("Test tooling requires a development checkout")
+        files = metadata.distribution("live-transcription-bot").files or []
+        expected = {
+            str(path)
+            for path in files
+            if str(path).startswith("live_transcript/") and str(path).endswith(".py")
+        }
+        if not expected:
+            raise ValueError("Installed package source inventory unavailable")
+        members = [(name, read_source(package.parent, name)) for name in sorted(expected)]
     target = Path(destination).resolve()
-    if target.is_relative_to(root) and target.relative_to(root).as_posix() in allowed:
-        raise ValueError("Bundle output would replace reviewed source")
-    # Validate and read before touching an existing output bundle.
-    members = []
-    for name in sorted(names):
-        data = read_source(root, name)
-        if name == "join_meeting.py":
-            data = b"from _bootstrap import dispatch\ndispatch(__name__, 'live_transcript.providers.zoom')\n"
-        members.append((name, data))
+    if target.is_relative_to(package):
+        raise ValueError("Bundle output must be outside the package")
+    main = b"from live_transcript.worker import main\nimport sys\nraise SystemExit(main(bundle=sys.argv[0]))\n"
+    members.append(("__main__.py", main))
     with atomic_destination(target) as temporary:
-        with temporary.open("wb") as output:
-            with gzip.GzipFile(filename="", mode="wb", fileobj=output, mtime=0) as compressed:
-                with tarfile.open(fileobj=compressed, mode="w") as archive:
-                    for name, data in members:
-                        item = tarfile.TarInfo(name)
-                        item.size = len(data)
-                        item.mode = 0o755 if (root / name).stat().st_mode & 0o111 else 0o644
-                        item.mtime = 0
-                        item.uid = item.gid = 0
-                        item.uname = item.gname = ""
-                        archive.addfile(item, io.BytesIO(data))
+        with zipfile.ZipFile(temporary, "w", compression=zipfile.ZIP_DEFLATED) as bundle:
+            for name, data in sorted(members):
+                item = zipfile.ZipInfo(name, date_time=(1980, 1, 1, 0, 0, 0))
+                item.compress_type = zipfile.ZIP_DEFLATED
+                item.create_system = 3
+                item.external_attr = 0o100644 << 16
+                bundle.writestr(item, data)
     return [name for name, _ in members]
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output")
+    parser.add_argument("output", type=Path)
+    parser.add_argument("--with-test-tools", action="store_true")
     args = parser.parse_args(argv)
-    from live_transcript.core.config import get
-
-    build_bundle(get("paths", "root"), args.output)
+    build_bundle(args.output, with_test_tools=args.with_test_tools)
 
 
 if __name__ == "__main__":

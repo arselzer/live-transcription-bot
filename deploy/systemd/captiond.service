@@ -3,8 +3,8 @@ Description=Live Transcript durable caption daemon
 After=network.target
 StartLimitIntervalSec=0
 [Service]
-WorkingDirectory=%h/live-transcription-bot
-ExecStart=/usr/bin/python3 %h/live-transcription-bot/captiond.py
+WorkingDirectory=%h
+ExecStart=%h/live-transcription-bot/.venv/bin/live-transcript serve captions
 Restart=on-failure
 RestartSec=3
 UMask=0077

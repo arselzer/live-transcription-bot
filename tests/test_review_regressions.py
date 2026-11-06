@@ -74,7 +74,7 @@ class ContractTests(unittest.TestCase):
         settings = config.load(ROOT / "config.example.toml")
         self.assertEqual(settings["postprocess"]["chunk_seconds"], 300)
         self.assertFalse(settings["postprocess"]["diarization_enabled"])
-        self.assertTrue((ROOT / "postprocess.sh").is_file())
+        self.assertTrue((ROOT / "src/live_transcript/runtime/launch.sh").is_file())
 
     def test_status_preserves_public_admission_diagnostics_key(self):
         output = io.StringIO()
@@ -90,6 +90,31 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(
             json.loads(output.getvalue())["admission_diagnostics"], "/example/diagnostics"
         )
+
+    def test_doctor_checks_disk_without_creating_a_new_workspace(self):
+        from unittest.mock import MagicMock
+
+        with tempfile.TemporaryDirectory() as directory:
+            workspace = Path(directory) / "new/workspace"
+            original = config.get
+
+            def setting(section, key):
+                return (
+                    str(workspace)
+                    if (section, key) == ("paths", "root")
+                    else original(section, key)
+                )
+
+            with (
+                patch.object(config, "get", side_effect=setting),
+                patch.object(cli, "current", return_value={"status": "idle"}),
+                patch.object(cli.socket, "create_connection", side_effect=OSError("isolated")),
+                patch.object(cli.urllib.request, "urlopen", side_effect=OSError("isolated")),
+                patch.object(cli.subprocess, "run", return_value=MagicMock(stdout="{}")),
+            ):
+                report = cli.doctor()
+            self.assertIn("host disk reserve", [row["name"] for row in report["checks"]])
+            self.assertFalse(workspace.exists())
 
     def test_invalid_guest_root_and_timezone_are_rejected(self):
         for text in (
@@ -190,6 +215,53 @@ class ArtifactTests(unittest.TestCase):
             report = json.loads(wav.with_suffix(".postprocess-status.json").read_text())
             self.assertEqual(report["status"], "processing_failed")
             self.assertEqual(wav.read_bytes(), b"original evidence")
+
+    def test_optional_vault_failure_preserves_finished_notes_and_reports_warning(self):
+        from live_transcript.runtime import postprocess
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            wav = root / "meeting.wav"
+            wav.write_bytes(b"original evidence")
+
+            def completed(_):
+                wav.with_suffix(".md").write_text("Finished notes")
+                postprocess.publish_status(
+                    str(wav), dict(status="complete", artifacts={"notes": "fixture"})
+                )
+
+            settings = {"logs": str(root / "logs"), "vault": str(root / "unavailable-vault")}
+            with (
+                patch.object(postprocess, "main", side_effect=completed) as process,
+                patch.object(postprocess, "get", side_effect=lambda section, key: settings[key]),
+                patch("builtins.print"),
+            ):
+                postprocess.run_logged([str(wav)])
+            process.assert_called_once()
+            state = json.loads(wav.with_suffix(".postprocess-status.json").read_text())
+            self.assertEqual(state["status"], "complete_with_warnings")
+            self.assertEqual(state["vault"]["status"], "failed")
+            self.assertEqual(state["artifacts"], {"notes": "fixture"})
+            self.assertEqual(wav.with_suffix(".md").read_text(), "Finished notes")
+            self.assertEqual(wav.read_bytes(), b"original evidence")
+            self.assertEqual((root / "logs/post-meeting.log").stat().st_mode & 0o777, 0o600)
+
+    def test_processing_log_refuses_symlinks_before_starting_work(self):
+        from live_transcript.runtime import postprocess
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = root / "unrelated.txt"
+            target.write_text("Preserved")
+            (root / "post-meeting.log").symlink_to(target)
+            with (
+                patch.object(postprocess, "get", return_value=directory),
+                patch.object(postprocess, "main") as process,
+            ):
+                with self.assertRaises(OSError):
+                    postprocess.run_logged([str(root / "meeting.wav")])
+            process.assert_not_called()
+            self.assertEqual(target.read_text(), "Preserved")
 
     def test_atomic_write_preserves_old_file_and_cleans_failed_temporary(self):
         with tempfile.TemporaryDirectory() as directory:
