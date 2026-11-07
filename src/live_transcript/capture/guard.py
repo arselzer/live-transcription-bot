@@ -185,6 +185,7 @@ class Archive:
         audio_source = audio_source or get("audio", "sink") + ".monitor"
         config = dict(
             archive_version=2,
+            display=os.environ.get("DISPLAY", ":99"),
             started=started,
             deadline=started + max_seconds + 30,
             provider=provider,
@@ -310,6 +311,13 @@ class Guard:
             free_bytes=shutil.disk_usage(self.root).free,
         )
         for name in ("audio", "screen", "snapshots", "observer"):
+            if (
+                name == "observer"
+                and self.config.get("provider") == "google"
+                and not self.config.get("cdp")
+            ):
+                health[name] = dict(running=False, state="screen_evidence_only")
+                continue
             slot = self.slots.get(name)
             if not slot:
                 self.launch(name)

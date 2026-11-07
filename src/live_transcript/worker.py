@@ -24,6 +24,8 @@ ROLES = {
     "captions": "live_transcript.transcription.daemon",
     "asr": "live_transcript.transcription.service",
     "config": "live_transcript.core.config",
+    "console": "live_transcript.runtime.console",
+    "desktop": "live_transcript.runtime.console",
     "layout": "live_transcript.storage.layout",
     "state": "live_transcript.runtime.state",
     "bundle": "live_transcript.runtime.deployment",

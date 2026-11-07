@@ -66,6 +66,10 @@ class VoiceController:
         return ident
 
     def poll(self):
+        from live_transcript.runtime.console import operator_control_active
+
+        if operator_control_active():
+            return
         requests = sorted(self.inbox.glob("*.json"))
         if not requests:
             return

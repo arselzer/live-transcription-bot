@@ -141,3 +141,14 @@ HTTP 403 from CreateMeetingDevice before entering the call. This does not establ
 the cause of refusal, and fixture results must not be described as a successful
 live Google Meet recording. No account login is required by the adapter's default
 guest mode; signed-in profiles are a separate, explicit configuration choice.
+
+November 7 observation: the operator entered an active room manually through the
+VM console as an unsigned guest, allowing camera/microphone, entering a name,
+and clicking Join. Independent audio, screen video, and snapshots were then
+captured without attaching automation to that browser. Thus this VM/network can
+enter Google Meet; earlier automated refusals do not prove a guest-access or
+account requirement. Fully automated admission is still experimental. One
+observed prejoin variation appended accessibility guidance to Join now's name;
+the adapter now permits that variation only when the button's visible text still
+matches the exact join action. Do not attribute the successful manual admission
+to that selector change or claim it resolves the upstream HTTP refusal.

@@ -1,5 +1,4 @@
 # Explicit reviewed source selection; no runtime directories.
-include .github/workflows/tests.yml
 include .gitignore
 include MANIFEST.in
 include PUBLIC_SOURCE_FILES.txt
@@ -138,3 +137,20 @@ include src/live_transcript/runtime/containers.py
 include src/live_transcript/runtime/whisper.Dockerfile
 include docs/deployment-architecture.md
 include install.sh
+include src/live_transcript/runtime/console.py
+include src/live_transcript/runtime/operator.py
+include tools/build_operator_ui.py
+include frontend/package.json
+include frontend/index.html
+include frontend/package-lock.json
+include frontend/vite.config.js
+include frontend/src/main.js
+include frontend/src/style.css
+include frontend/src/App.vue
+include src/live_transcript/operator_ui/index.html
+include src/live_transcript/operator_ui/style.css
+include src/live_transcript/operator_ui/VUE-LICENSE.txt
+include src/live_transcript/operator_ui/app.js
+include tests/test_operator_console.py
+include docs/operator-console.md
+include docs/hermes.md

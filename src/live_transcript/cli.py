@@ -238,6 +238,30 @@ def main(argv=None):
     start.add_argument("--passcode")
     start.add_argument("--dry", action="store_true")
     commands.add_parser("stop", help="gracefully stop the exact current session")
+    console = commands.add_parser(
+        "console", help="view the VM browser through a private local noVNC tunnel"
+    )
+    console.add_argument(
+        "--control",
+        action="store_true",
+        help="enable keyboard/mouse and pause automated UI recovery",
+    )
+    console.add_argument("--display", help="explicit VM X display when multiple are active")
+    console.add_argument(
+        "--idle",
+        action="store_true",
+        help="open a temporary diagnostic desktop if no meeting display exists",
+    )
+    console.add_argument(
+        "--port", type=int, default=0, help="host loopback port; default chooses a free port"
+    )
+    console.add_argument("--max-min", type=int, default=30)
+    console.add_argument(
+        "--listen",
+        default="127.0.0.1",
+        help="host listen address; use 0.0.0.0 explicitly for VPN/LAN access",
+    )
+    console.add_argument("--advertise-host", help="VPN/LAN address to put in the viewer link")
     say = commands.add_parser("say", help="explicit TTS request, never automatic")
     say.add_argument("text")
     say.add_argument("--lang", choices=("en", "de"), default="en")
@@ -286,7 +310,17 @@ def main(argv=None):
         runtime_config.CONFIG = runtime_config.load()
         from live_transcript.core.config import get, ssh_options
 
-        if args.command == "config":
+        if args.command == "console":
+            from live_transcript.runtime.console import open_console
+
+            def console_emit(value):
+                if args.json:
+                    print(json.dumps(value, ensure_ascii=False), flush=True)
+                else:
+                    emit(value)
+
+            console_emit(open_console(args, console_emit))
+        elif args.command == "config":
             emit(runtime_config.CONFIG, args.json)
         elif args.command == "doctor":
             result = doctor()

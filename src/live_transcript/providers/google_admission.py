@@ -11,6 +11,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from live_transcript.core.files import atomic_json
 from live_transcript.core.options import provider_origin
 from live_transcript.providers.interaction import NativeInputError, NativeTargetChanged
+from live_transcript.runtime.console import operator_control_active
 
 SNAPSHOT_JS = """includeText => {
   const visible=e=>!!e.getClientRects().length && getComputedStyle(e).visibility!=='hidden';
@@ -70,10 +71,22 @@ def visible(locator):
 
 def button(page, text):
     pattern = re.compile(r"^" + re.escape(text) + r"(?:\s*\([^)]{1,80}\))?$", re.I)
-    return page.get_by_role("button", name=pattern).first
+    exact = page.get_by_role("button", name=pattern)
+    if text in ("Join now", "Ask to join") and exact.count() == 0:
+        # Meet can append accessibility guidance to the button name. Require
+        # the exact visible text as well, so unrelated permission/consent
+        # controls can never become a fallback target.
+        return (
+            page.get_by_role("button", name=re.compile(r"^" + re.escape(text) + r"(?:\s|$)", re.I))
+            .filter(has_text=re.compile(r"^\s*" + re.escape(text) + r"\s*$", re.I))
+            .first
+        )
+    return exact.first
 
 
 def click_if_visible(page, text):
+    if operator_control_active():
+        return False
     try:
         control = button(page, text)
         if control.is_visible() and control.is_enabled():
@@ -232,6 +245,9 @@ def prejoin(page, name, timeout=330, *, interaction=None, require_sign_in=False,
                 if diagnostics is not None:
                     checkpoint(page, diagnostics, AdmissionState("admitted"), inspect(page, False))
                 return
+            if operator_control_active():
+                page.wait_for_timeout(500)
+                continue
             data = inspect(page)
             state = classify(
                 data,

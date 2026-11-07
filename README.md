@@ -59,6 +59,41 @@ TTS is optional and its voice assets are described in [deployment](docs/deployme
 See the [architecture review](docs/deployment-architecture.md) for supervision,
 container, recovery, storage, and deployment tradeoffs.
 
+## View and control the VM
+
+Open the browser console while a meeting is starting or running:
+
+```bash
+live-transcript --json console
+# Enable keyboard/mouse, direct paste, and pause automated UI recovery:
+live-transcript --json console --control
+# Reach it from your VPN. Use your host's actual VPN address or hostname:
+live-transcript --json console --control --listen 0.0.0.0 \
+  --advertise-host console.example --port 6080 --max-min 90
+```
+
+Open the printed private URL. It includes the authentication token and VNC
+password in its fragment. Keep that full link private. The Vue interface has a
+scaled VM viewer, one-step text paste, keyboard shortcuts, fullscreen/reconnect,
+recording health, available storage, speech queue/signal status, and activity.
+Select the destination field in the VM, then paste into the side panel; it never
+sends an Enter key. Node is needed only when rebuilding the UI, not to run it.
+
+The listener defaults to loopback. Explicit external binding is intended for a
+trusted VPN; use a TLS reverse proxy for an untrusted network. Leave the console
+command running, or supervise it independently. Closing the viewer does not stop
+an ordinary meeting's capture. Manual control expires when its SSH heartbeat is
+lost; automation then resumes. Multiple active VM displays require `--display :N`.
+
+`console --idle --control` opens a separate diagnostic browser when the VM is
+idle. That desktop has its own bounded service and survives a viewer disconnect;
+it holds the VM's idle lease until its lifetime ends. It does **not** automatically
+record a manually joined call. Use `start` for supervised admission and recording.
+
+See [console operations](docs/operator-console.md) and the
+[Hermes integration contract](docs/hermes.md) for recovery, notifications, and
+sharing the console link before a meeting.
+
 ## Join and record a meeting
 
 Use the full invitation and keep it quoted:

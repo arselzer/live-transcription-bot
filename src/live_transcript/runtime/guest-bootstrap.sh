@@ -11,7 +11,8 @@ apt-get -o Acquire::Retries=5 install -y --no-install-recommends \
   linux-generic linux-headers-generic \
   v4l2loopback-dkms python3-pip python3-venv python3-pil \
   ffmpeg xvfb xauth pulseaudio pulseaudio-utils alsa-utils \
-  rsync xdotool xclip sudo dbus-user-session ca-certificates
+  rsync xdotool xclip sudo dbus-user-session ca-certificates \
+  x11vnc novnc websockify openbox
 python3 -m venv /opt/live-transcript/venv
 /opt/live-transcript/venv/bin/python -m pip install 'playwright==1.64.1' 'Pillow==12.0.0'
 /opt/live-transcript/venv/bin/python -m playwright install-deps chromium

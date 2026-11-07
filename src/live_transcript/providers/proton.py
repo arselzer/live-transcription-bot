@@ -62,6 +62,10 @@ def button(pg, label):
 
 
 def click_if_visible(pg, label):
+    from live_transcript.runtime.console import operator_control_active
+
+    if operator_control_active():
+        return False
     try:
         b = button(pg, label)
         if b.is_visible() and b.is_enabled():
@@ -118,6 +122,11 @@ def prejoin(pg, name, timeout=330):
         try:
             if joined(pg):
                 return
+            from live_transcript.runtime.console import operator_control_active
+
+            if operator_control_active():
+                pg.wait_for_timeout(500)
+                continue
             # Scope failures to dialogs. Participant names/chat must not abort a call.
             dialogs = pg.get_by_role("dialog").all_text_contents()
             fatal = re.compile(

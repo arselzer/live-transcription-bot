@@ -218,6 +218,10 @@ class UIRescue:
         return True
 
     def poll(self, page, controls_ok):
+        from live_transcript.runtime.console import operator_control_active
+
+        if operator_control_active():
+            return
         if not get("recovery", "enabled"):
             return
         now = time.monotonic()

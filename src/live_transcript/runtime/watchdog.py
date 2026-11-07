@@ -453,6 +453,9 @@ def main(argv=None):
             issues = {"watchdog-error": f"{type(exc).__name__}; no process-wide cleanup attempted"}
         issues.update(backend_issues)
         issues.update(recovery_issues())
+        from live_transcript.runtime.operator import console_notifications
+
+        issues.update(console_notifications(state))
         deliver(state, issues, a.dry_run)
 
 

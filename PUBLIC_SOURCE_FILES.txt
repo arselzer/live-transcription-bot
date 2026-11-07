@@ -1,5 +1,4 @@
 # Explicitly reviewed source files. Runtime data is excluded.
-.github/workflows/tests.yml
 .gitignore
 MANIFEST.in
 PUBLIC_SOURCE_FILES.txt
@@ -138,3 +137,20 @@ src/live_transcript/runtime/containers.py
 src/live_transcript/runtime/whisper.Dockerfile
 docs/deployment-architecture.md
 install.sh
+src/live_transcript/runtime/console.py
+src/live_transcript/runtime/operator.py
+tools/build_operator_ui.py
+frontend/package.json
+frontend/index.html
+frontend/package-lock.json
+frontend/vite.config.js
+frontend/src/main.js
+frontend/src/style.css
+frontend/src/App.vue
+src/live_transcript/operator_ui/index.html
+src/live_transcript/operator_ui/style.css
+src/live_transcript/operator_ui/VUE-LICENSE.txt
+src/live_transcript/operator_ui/app.js
+tests/test_operator_console.py
+docs/operator-console.md
+docs/hermes.md

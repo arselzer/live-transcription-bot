@@ -108,8 +108,9 @@ secret detector or a substitute for reviewing Git history and author metadata.
 
 Builds enforce the same source gate. A source distribution includes only its
 explicit manifest and must be tested by building a wheel from the extracted
-archive, as well as directly from the checkout. CI runs only offline tests and
-format/lint checks; it does not join meetings or validate GPU performance.
+archive, as well as directly from the checkout. Run the offline tests and
+format/lint checks locally; no GitHub Actions workflow is bundled. These checks
+do not join meetings or validate GPU performance.
 
 Source-archive checks inspect tar ownership, group, PAX headers and timestamps,
 not only file contents. The packaging hook normalizes these fields in a private
@@ -127,6 +128,23 @@ Wheel builds use a fresh snapshot of reviewed source. A previous setuptools
 `build/lib` directory must not contribute deleted modules. Release verification
 compares wheel member names and bytes with the reviewed package, in addition to
 building from the source archive and scanning artifact contents for private data.
+
+## Operator console
+
+`tests/test_operator_console.py` covers bearer/cookie authentication, Host/Origin
+checks, unauthorized WebSockets, traversal, UTF-8 paste limits, key allowlisting,
+private logs, PID reuse, expired control, partial SSH handshakes, bounded desktop
+service ownership, pending/degraded capture transitions, and watchdog event
+deduplication. No clipboard text or private error detail should reach events or
+HTTP responses.
+
+The live VM drill on November 7 connected the packaged Vue page through the
+authenticated noVNC proxy to an existing Google call, confirmed fresh capture
+health, and checked a narrow phone viewport for horizontal overflow. A separate
+scratch Xvfb/Chromium desktop verified literal Unicode and multiline clipboard
+input with no Enter events. The real meeting browser was not restarted for these
+checks. Browser-only tests should use DOM readiness or explicit connection state;
+an active noVNC WebSocket makes generic network-idle checks unsuitable.
 
 ## Managed-install validation
 

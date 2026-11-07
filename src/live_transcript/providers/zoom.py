@@ -902,70 +902,75 @@ def main(name_retry_allowed=False, absolute_deadline=None):
                 print(
                     "UI recovery unavailable; recording continues:", type(exc).__name__, flush=True
                 )
-            # zoom throws first-run onboarding modals that swallow every other click
-            dismiss_modals()
-            # turn on the fake caption camera, CONFIRMED via the button's aria-label
-            # (zoom renders to canvas, so body text never shows 'stop my video' — the
-            #  old gate false-passed; poll the real button state until it flips)
-            if not video_on:
-                vs = video_state()
-                if vs == "on":
-                    video_on = True
-                    print("VIDEO ON (caption camera, confirmed)", flush=True)
-                elif vs == "off":
-                    if (
-                        click_any_frames(
-                            (
-                                'button[aria-label*="start my video" i]',
-                                'button[aria-label*="start" i][aria-label*="video" i]',
-                                'button[aria-label="Start Video"]',
+            from live_transcript.runtime.console import operator_control_active
+
+            if not operator_control_active():
+                # zoom throws first-run onboarding modals that swallow every other click
+                dismiss_modals()
+                # turn on the fake caption camera, CONFIRMED via the button's aria-label
+                # (zoom renders to canvas, so body text never shows 'stop my video' — the
+                #  old gate false-passed; poll the real button state until it flips)
+                if not video_on:
+                    vs = video_state()
+                    if vs == "on":
+                        video_on = True
+                        print("VIDEO ON (caption camera, confirmed)", flush=True)
+                    elif vs == "off":
+                        if (
+                            click_any_frames(
+                                (
+                                    'button[aria-label*="start my video" i]',
+                                    'button[aria-label*="start" i][aria-label*="video" i]',
+                                    'button[aria-label="Start Video"]',
+                                )
                             )
+                            or js_click("start my video")
+                            or js_click("start video")
+                        ):
+                            pg.wait_for_timeout(2500)
+                            if video_state() == "on":
+                                video_on = True
+                                print("VIDEO ON (caption camera, confirmed)", flush=True)
+                # Zoom silently switches the camera off if the fake feed stalls even
+                # briefly (e.g. renderer race at start) — re-arm every 30s. This runs
+                # EVEN IF the initial confirm never passed (incident 2026-11-03: join
+                # proceeded with video never confirmed and the watchdog never armed).
+                if time.time() - last_vid_check > 30:
+                    last_vid_check = time.time()
+                    st_now = video_state()
+                    if st_now == "off":
+                        print(
+                            (
+                                "VIDEO DROPPED — re-enabling"
+                                if video_on
+                                else "VIDEO NEVER CONFIRMED — enabling now"
+                            ),
+                            flush=True,
                         )
-                        or js_click("start my video")
-                        or js_click("start video")
-                    ):
-                        pg.wait_for_timeout(2500)
-                        if video_state() == "on":
-                            video_on = True
-                            print("VIDEO ON (caption camera, confirmed)", flush=True)
-            # Zoom silently switches the camera off if the fake feed stalls even
-            # briefly (e.g. renderer race at start) — re-arm every 30s. This runs
-            # EVEN IF the initial confirm never passed (incident 2026-11-03: join
-            # proceeded with video never confirmed and the watchdog never armed).
-            if time.time() - last_vid_check > 30:
-                last_vid_check = time.time()
-                st_now = video_state()
-                if st_now == "off":
-                    print(
-                        (
-                            "VIDEO DROPPED — re-enabling"
-                            if video_on
-                            else "VIDEO NEVER CONFIRMED — enabling now"
-                        ),
-                        flush=True,
-                    )
-                    js_click_aria("start my video")
-                    click_any_frames(('button[aria-label*="start my video" i]',), t=1200)
-                    pg.wait_for_timeout(3500)
-                    video_on = video_state() == "on"
-                elif st_now == "on":
-                    video_on = True
-                    if (
-                        subprocess.run(
-                            ["pgrep", "-f", "rawvideo.*v4l2"], capture_output=True
-                        ).returncode
-                        != 0
-                    ):
-                        # camera reads but NO writer holds /dev/video0 (renderer lost
-                        # the device race): bounce the camera so the renderer's 2s
-                        # retry loop wins the device while Chrome's reader is closed
-                        print("CAMERA WRITER LOST — bouncing video to recover device", flush=True)
-                        js_click_aria("stop my video")
-                        click_any_frames(('button[aria-label*="stop my video" i]',), t=1200)
-                        pg.wait_for_timeout(4500)
                         js_click_aria("start my video")
                         click_any_frames(('button[aria-label*="start my video" i]',), t=1200)
-                        pg.wait_for_timeout(2500)
+                        pg.wait_for_timeout(3500)
+                        video_on = video_state() == "on"
+                    elif st_now == "on":
+                        video_on = True
+                        if (
+                            subprocess.run(
+                                ["pgrep", "-f", "rawvideo.*v4l2"], capture_output=True
+                            ).returncode
+                            != 0
+                        ):
+                            # camera reads but NO writer holds /dev/video0 (renderer lost
+                            # the device race): bounce the camera so the renderer's 2s
+                            # retry loop wins the device while Chrome's reader is closed
+                            print(
+                                "CAMERA WRITER LOST — bouncing video to recover device", flush=True
+                            )
+                            js_click_aria("stop my video")
+                            click_any_frames(('button[aria-label*="stop my video" i]',), t=1200)
+                            pg.wait_for_timeout(4500)
+                            js_click_aria("start my video")
+                            click_any_frames(('button[aria-label*="start my video" i]',), t=1200)
+                            pg.wait_for_timeout(2500)
             from live_transcript.providers.proton import meeting_ended
 
             try:
