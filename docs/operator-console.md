@@ -9,6 +9,8 @@ hostname, lifetime, display, and control options.
 
 ## Everyday use
 
+For several VMs in one page, use [the console hub](multiple-meetings.md#one-ui-for-several-vms).
+
 1. Run `live-transcript start 'INVITATION'` in your usual supervisor.
 2. Once its VM display exists, run `live-transcript --json console` to observe it.
 3. Open the `console_ready.url` from the output. Its full fragment is required.

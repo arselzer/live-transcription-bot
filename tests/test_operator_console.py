@@ -4,6 +4,7 @@ import http.client
 import http.cookiejar
 import json
 import os
+import socket
 from pathlib import Path
 import tempfile
 import threading
@@ -13,7 +14,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from live_transcript.runtime.console import guest_action, viewer_url, read_handshake, start_desktop
-from live_transcript.runtime.operator import ConsoleAuth, EventFeed, OperatorServer
+from live_transcript.runtime.operator import ConsoleAuth, ConsoleHub, EventFeed, OperatorServer
 from live_transcript.runtime.operator import console_notifications
 
 
@@ -457,6 +458,160 @@ class ConsoleAuthTests(unittest.TestCase):
             new = ConsoleAuth("shared", file)
             self.assertNotEqual(old.token, new.token)
             self.assertFalse(new.accepts(cookie))
+
+
+class ConsoleHubTests(unittest.TestCase):
+    request = ConsoleHTTPTests.request
+    login = ConsoleHTTPTests.login
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory()
+        self.auth = ConsoleAuth("shared", Path(self.temp.name) / "login.json")
+        self.backends = []
+        self.bridges = []
+        for index in range(2):
+            bridge = Mock()
+            bridge.call.return_value = dict(display=f":{70 + index}", control=True, capture=None)
+            backend = OperatorServer(
+                ("127.0.0.1", 0),
+                1,
+                bridge,
+                EventFeed(Path(self.temp.name) / f"events-{index}.jsonl"),
+                "127.0.0.1",
+                auth=self.auth,
+                viewer_password=f"password-{index}",
+            )
+            threading.Thread(target=backend.serve_forever, daemon=True).start()
+            self.backends.append(backend)
+            self.bridges.append(bridge)
+        self.server = ConsoleHub(
+            ("127.0.0.1", 0),
+            "127.0.0.1",
+            [f"first={self.backends[0].server_port}", f"second={self.backends[1].server_port}"],
+            self.auth,
+        )
+        threading.Thread(target=self.server.serve_forever, daemon=True).start()
+
+    def tearDown(self):
+        for server in [self.server, *self.backends]:
+            server.shutdown()
+            server.server_close()
+        self.temp.cleanup()
+
+    def test_single_login_selects_both_consoles_and_their_own_passwords(self):
+        self.assertEqual(self.request("GET", "/api/consoles")[0], 401)
+        self.assertEqual(self.request("GET", "/vm/first/api/status")[0], 401)
+        cookie = self.login()
+        code, _, body = self.request("GET", "/api/session", cookie=cookie)
+        self.assertEqual(code, 200)
+        self.assertEqual([item["id"] for item in json.loads(body)["consoles"]], ["first", "second"])
+        for index, ident in enumerate(("first", "second")):
+            code, _, body = self.request("GET", f"/vm/{ident}/api/session", cookie=cookie)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["viewer_password"], f"password-{index}")
+            code, _, body = self.request("GET", f"/vm/{ident}/api/status", cookie=cookie)
+            self.assertEqual(code, 200)
+            self.assertEqual(json.loads(body)["display"], f":{70 + index}")
+
+    def test_paste_targets_only_selected_vm_and_origin_is_checked(self):
+        cookie = self.login()
+        code, _, _ = self.request(
+            "POST", "/vm/second/api/action", dict(op="paste", text="hello"), cookie
+        )
+        self.assertEqual(code, 200)
+        self.bridges[1].call.assert_called_once_with(dict(op="paste", text="hello"))
+        self.bridges[0].call.assert_not_called()
+        code, _, _ = self.request(
+            "POST", "/vm/first/api/action", dict(op="key", key="Tab"), cookie, origin=False
+        )
+        self.assertEqual(code, 403)
+        self.bridges[0].call.assert_not_called()
+
+    def test_unknown_targets_and_proxy_paths_are_rejected(self):
+        cookie = self.login()
+        for path in (
+            "/vm/unknown/api/status",
+            "/vm/first/api/config",
+            "/vm/first/novnc/../api/status",
+            "/vm/first/novnc/%2e%2e/",
+            "/vm/first/http://example.com",
+        ):
+            self.assertEqual(self.request("GET", path, cookie=cookie)[0], 404)
+        self.assertEqual(
+            self.request(
+                "GET",
+                "/vm/first/novnc/websockify",
+                cookie=cookie,
+                origin=False,
+                extra={"Upgrade": "websocket"},
+            )[0],
+            403,
+        )
+
+    def test_mismatched_auth_and_offline_console_do_not_block_other_vm(self):
+        self.backends[1].auth = ConsoleAuth()
+        code, _, body = self.request("GET", "/vm/second/api/status", cookie=self.login())
+        self.assertEqual(code, 503)
+        self.assertIn(b"same shared login", body)
+        self.backends[1].shutdown()
+        self.backends[1].server_close()
+        cookie = self.login()
+        self.assertEqual(self.request("GET", "/vm/second/api/status", cookie=cookie)[0], 502)
+        self.assertEqual(self.request("GET", "/vm/first/api/status", cookie=cookie)[0], 200)
+
+    def test_hub_websocket_reaches_selected_authenticated_console(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            listener.settimeout(5)
+            self.backends[1].upstream = listener.getsockname()
+            received = []
+
+            def echo():
+                with listener.accept()[0] as connection:
+                    connection.settimeout(5)
+                    header = b""
+                    while b"\r\n\r\n" not in header:
+                        header += connection.recv(4096)
+                    received.append(header)
+                    connection.sendall(
+                        b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+                    )
+                    connection.sendall(connection.recv(32))
+
+            thread = threading.Thread(target=echo, daemon=True)
+            thread.start()
+            cookie = self.login()
+            with socket.create_connection(self.server.server_address, timeout=5) as client:
+                client.sendall(
+                    (
+                        f"GET /vm/second/novnc/websockify HTTP/1.1\r\nHost: {self.server.authority}\r\nOrigin: http://{self.server.authority}\r\nCookie: {cookie}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"
+                    ).encode()
+                )
+                response = b""
+                while b"\r\n\r\n" not in response:
+                    response += client.recv(4096)
+                self.assertTrue(response.startswith(b"HTTP/1.1 101"))
+                client.sendall(b"vm-specific-data")
+                self.assertEqual(client.recv(32), b"vm-specific-data")
+            thread.join(timeout=5)
+            self.assertEqual(received[0].splitlines()[0], b"GET /websockify HTTP/1.1")
+            self.bridges[0].call.assert_not_called()
+
+    def test_hub_rejects_ambiguous_or_arbitrary_upstreams(self):
+        for entries in (
+            ["bad/name=6001"],
+            ["first=0"],
+            ["first=65536"],
+            ["first=http://example.com"],
+            ["same=6001", "same=6002"],
+            ["one=6001", "two=6001"],
+            ["one=6080"],
+        ):
+            with self.assertRaises(ValueError):
+                ConsoleHub(("127.0.0.1", 6080), "127.0.0.1", entries, self.auth)
+        with self.assertRaises(ValueError):
+            ConsoleHub(("127.0.0.1", 0), "127.0.0.1", ["one=6001"], ConsoleAuth())
 
 
 if __name__ == "__main__":

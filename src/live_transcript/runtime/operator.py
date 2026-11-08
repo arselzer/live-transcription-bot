@@ -439,6 +439,15 @@ class Handler(BaseHTTPRequestHandler):
             )
         if not self.authenticated():
             return self.reply(401, dict(error="Console session expired; reopen its link"))
+        if path == "/api/consoles":
+            return self.reply(
+                200,
+                dict(
+                    consoles=getattr(
+                        self.server, "consoles", [dict(id="local", label="Current VM", prefix="")]
+                    )
+                ),
+            )
         if path == "/api/events":
             return self.reply(200, dict(events=self.server.events.recent()))
         if path == "/api/status":
@@ -481,12 +490,14 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             conn.close()
 
-    def proxy_websocket(self):
-        if urlsplit(self.path).path != "/novnc/websockify":
+    def proxy_websocket(
+        self, address=None, request_path="/websockify", authority="127.0.0.1", extra_headers=None
+    ):
+        if address is None and urlsplit(self.path).path != "/novnc/websockify":
             return self.reply(404, dict(error="Unknown viewer socket"))
         self.close_connection = True
         try:
-            with socket.create_connection(self.server.upstream, timeout=5) as upstream:
+            with socket.create_connection(address or self.server.upstream, timeout=5) as upstream:
                 allowed = (
                     "Upgrade",
                     "Connection",
@@ -494,8 +505,9 @@ class Handler(BaseHTTPRequestHandler):
                     "Sec-WebSocket-Version",
                     "Sec-WebSocket-Protocol",
                 )
-                lines = ["GET /websockify HTTP/1.1", "Host: 127.0.0.1"]
+                lines = [f"GET {request_path} HTTP/1.1", f"Host: {authority}"]
                 lines += [f"{key}: {self.headers[key]}" for key in allowed if self.headers.get(key)]
+                lines += [f"{key}: {value}" for key, value in (extra_headers or {}).items()]
                 upstream.sendall(("\r\n".join(lines) + "\r\n\r\n").encode())
                 self.wfile.flush()
                 self.connection.settimeout(10)
@@ -511,6 +523,164 @@ class Handler(BaseHTTPRequestHandler):
                         (upstream if source is self.connection else self.connection).sendall(block)
         except (OSError, ValueError):
             pass
+
+
+class ConsoleHub(ThreadingHTTPServer):
+    """One origin for fixed local consoles; guest capture remains independently owned."""
+
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address, advertised_host, entries, auth):
+        if auth.mode != "shared":
+            raise ValueError("The console hub requires shared console authentication")
+        self.targets = {}
+        if not 1 <= len(entries) <= 32:
+            raise ValueError("Configure between 1 and 32 consoles")
+        for entry in entries:
+            ident, separator, port = entry.partition("=")
+            if (
+                not separator
+                or not re.fullmatch(r"[a-z][a-z0-9-]{0,39}", ident)
+                or not port.isascii()
+                or not port.isdecimal()
+                or not 1 <= int(port) <= 65535
+                or ident in self.targets
+                or int(port) == address[1]
+            ):
+                raise ValueError("Each console must have a unique name and local port: name=6081")
+            self.targets[ident] = int(port)
+        if len(set(self.targets.values())) != len(self.targets):
+            raise ValueError("Each console must use a different local port")
+        self.consoles = [
+            dict(id=ident, label=ident.replace("-", " ").title(), prefix="/vm/" + ident)
+            for ident in self.targets
+        ]
+        self.auth, self.token, self.cookie_name = auth, auth.token, auth.cookie_name
+        self.advertised_host = advertised_host
+        self.monitor_stop = threading.Event()
+        super().__init__(address, HubHandler)
+        self.authority = f"{advertised_host}:{self.server_port}"
+
+    def session(self):
+        return dict(authenticated=True, login_mode=self.auth.mode, consoles=self.consoles)
+
+    def server_close(self):
+        self.monitor_stop.set()
+        super().server_close()
+
+
+class HubHandler(Handler):
+    def target(self):
+        path = urlsplit(self.path).path
+        match = re.fullmatch(r"/vm/([a-z][a-z0-9-]{0,39})(/.*)", path)
+        if match and match[1] in self.server.targets:
+            return self.server.targets[match[1]], match[2]
+        return None
+
+    def do_GET(self):
+        if self.path.startswith("/vm/"):
+            return self.forward("GET")
+        if urlsplit(self.path).path in ("/api/status", "/api/events"):
+            return self.reply(404, dict(error="Select a VM first"))
+        super().do_GET()
+
+    def do_POST(self):
+        if self.path.startswith("/vm/"):
+            return self.forward("POST")
+        if self.path != "/api/session":
+            return self.reply(404, dict(error="Unknown action"))
+        super().do_POST()
+
+    def forward(self, method):
+        import http.client
+
+        if not self.valid_host() or (method == "POST" and not self.same_origin()):
+            return self.reply(403, dict(error="Console origin does not match"))
+        if not self.authenticated():
+            return self.reply(401, dict(error="Console session expired; reopen its link"))
+        target = self.target()
+        if not target:
+            return self.reply(404, dict(error="Unknown VM"))
+        port, path = target
+        socket_request = self.headers.get("Upgrade", "").lower() == "websocket"
+        allowed = (
+            path in ("/api/session", "/api/status", "/api/events") or path.startswith("/novnc/")
+            if method == "GET"
+            else path in ("/api/action", "/api/interaction")
+        )
+        if not allowed or any(value in path for value in ("..", "%", "\\")):
+            return self.reply(404, dict(error="Unknown console endpoint"))
+        cookie = SimpleCookie(self.headers.get("Cookie", ""))
+        headers = dict(Cookie=f"{self.server.cookie_name}={cookie[self.server.cookie_name].value}")
+        authority = f"{self.server.advertised_host}:{port}"
+        headers["Origin"] = "http://" + authority
+        if socket_request:
+            if path != "/novnc/websockify" or not self.same_origin():
+                return self.reply(403, dict(error="Invalid WebSocket origin"))
+            return self.proxy_websocket(("127.0.0.1", port), path, authority, headers)
+        payload = None
+        if method == "POST":
+            self.close_connection = True
+            try:
+                payload = json.dumps(self.body()).encode()
+            except (ValueError, UnicodeError):
+                return self.reply(400, dict(error="Invalid action or request body"))
+            headers["Content-Type"] = "application/json"
+        headers["Host"] = authority
+        conn = http.client.HTTPConnection("127.0.0.1", port, timeout=16)
+        try:
+            conn.request(method, path, payload, headers)
+            response = conn.getresponse()
+            body = response.read(4 * 1024 * 1024 + 1)
+            if len(body) > 4 * 1024 * 1024:
+                raise ValueError("Oversized console response")
+            if response.status == 401:
+                return self.reply(
+                    503, dict(error="This console must use the same shared login file as the hub")
+                )
+            self.reply(
+                response.status,
+                body,
+                response.getheader("Content-Type", "application/octet-stream"),
+            )
+        except (OSError, ValueError, http.client.HTTPException):
+            self.reply(
+                502, dict(error="This VM console is unavailable; recording may still be running")
+            )
+        finally:
+            conn.close()
+
+
+def run_hub(args, emit):
+    from live_transcript.core.config import get
+    from live_transcript.runtime.console import viewer_url
+    import ipaddress
+
+    address = ipaddress.ip_address(args.listen)
+    if address.version != 4 or not 0 <= args.port <= 65535:
+        raise ValueError("Use an IPv4 listen address and a valid port")
+    if address.is_unspecified and not args.advertise_host:
+        raise ValueError("Set --advertise-host when listening on 0.0.0.0")
+    advertised = (args.advertise_host or args.listen).lower()
+    viewer_url(advertised, args.port or 1, "validation")
+    auth = ConsoleAuth(
+        get("console", "login_mode"),
+        get("console", "shared_login_file"),
+        get("console", "session_seconds"),
+    )
+    server = ConsoleHub((args.listen, args.port), advertised, args.console, auth)
+    emit(
+        dict(
+            url=f"http://{server.authority}/#" + urlencode(dict(token=auth.token)),
+            consoles=server.consoles,
+            note="Switching consoles does not stop VM capture",
+        )
+    )
+    try:
+        server.serve_forever()
+    finally:
+        server.server_close()
 
 
 def launch_ui(

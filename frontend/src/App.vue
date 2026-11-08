@@ -14,20 +14,28 @@ const fragment = new URLSearchParams(location.hash.slice(1));
 const token = fragment.get("token") || "";
 const password = ref(fragment.get("password") || "");
 const authenticated = ref(false);
+const consoles = ref([]),
+  selected = ref("local"),
+  vmReady = ref(false);
+const apiBase = computed(
+  () => consoles.value.find((item) => item.id === selected.value)?.prefix || "",
+);
 const now = ref(Date.now()),
   lastStatusAt = ref(0);
 let timer,
   clockTimer,
-  refreshing = false,
+  viewerObserver,
+  refreshing = null,
   lastInteraction = 0;
 const viewerUrl = computed(
   () =>
+    apiBase.value +
     "/novnc/vnc.html#" +
     new URLSearchParams({
       autoconnect: "1",
       resize: "scale",
       password: password.value,
-      path: "novnc/websockify",
+      path: (apiBase.value + "/novnc/websockify").replace(/^\//, ""),
       show_dot: "1",
     }),
 );
@@ -61,8 +69,8 @@ const disk = computed(() =>
 const control = computed(
   () => state.value?.control === true && statusAge.value < 12,
 );
-async function api(path, data, retry = true) {
-  const r = await fetch("/api/" + path, {
+async function api(path, data, retry = true, base = apiBase.value) {
+  const r = await fetch(base + "/api/" + path, {
     method: data === undefined ? "GET" : "POST",
     headers: data === undefined ? {} : { "Content-Type": "application/json" },
     body: data === undefined ? undefined : JSON.stringify(data),
@@ -70,27 +78,31 @@ async function api(path, data, retry = true) {
   });
   const result = await r.json();
   if (r.status === 401 && path !== "session" && token && retry) {
-    const session = await api("session", { token });
-    password.value = session.viewer_password || password.value;
-    reconnect();
-    return api(path, data, false);
+    await api("session", { token }, false, "");
+    return api(path, data, false, base);
   }
   if (!r.ok) throw new Error(result.error || "Request failed");
   return result;
 }
 async function refresh() {
-  if (refreshing || !authenticated.value) return;
-  refreshing = true;
+  const base = apiBase.value;
+  if (refreshing === base || !authenticated.value || !vmReady.value) return;
+  refreshing = base;
   try {
-    state.value = await api("status");
+    const [status, activity] = await Promise.all([
+      api("status", undefined, true, base),
+      api("events", undefined, true, base),
+    ]);
+    if (base !== apiBase.value) return;
+    state.value = status;
     lastStatusAt.value = Date.now();
     now.value = Date.now();
-    events.value = (await api("events")).events;
+    events.value = activity.events;
     error.value = "";
   } catch (e) {
-    error.value = e.message;
+    if (base === apiBase.value) error.value = e.message;
   } finally {
-    refreshing = false;
+    if (refreshing === base) refreshing = null;
   }
 }
 async function action(op, values = {}) {
@@ -126,31 +138,51 @@ function interaction() {
   api("interaction", {}).catch(() => {});
 }
 function attachViewer() {
+  viewerObserver?.disconnect();
   const win = viewer.value?.contentWindow;
   const doc = win?.document;
   if (!doc) return;
   doc.addEventListener("pointerdown", interaction);
   doc.addEventListener("keydown", interaction);
-  const observer = new MutationObserver(() => {
+  viewerObserver = new MutationObserver(() => {
     connected.value = doc.documentElement.classList.contains("noVNC_connected");
   });
-  observer.observe(doc.documentElement, {
+  viewerObserver.observe(doc.documentElement, {
     attributes: true,
     attributeFilter: ["class"],
   });
 }
+async function selectConsole(id) {
+  if (busy.value || !consoles.value.some((item) => item.id === id)) return;
+  selected.value = id;
+  state.value = null;
+  events.value = [];
+  notice.value = "";
+  text.value = "";
+  error.value = "";
+  lastStatusAt.value = 0;
+  await reconnect();
+}
 async function reconnect() {
+  const base = apiBase.value;
+  viewerObserver?.disconnect();
+  vmReady.value = false;
   connected.value = false;
   try {
-    let session = await api("session");
-    if (!session.authenticated && token)
-      session = await api("session", { token });
+    let session = await api("session", undefined, true, base);
+    if (!session.authenticated && token) {
+      await api("session", { token }, false, "");
+      session = await api("session", undefined, false, base);
+    }
+    if (base !== apiBase.value) return;
     if (!session.authenticated)
       throw new Error("Open a private console login link first.");
-    password.value = session.viewer_password || password.value;
+    password.value = session.viewer_password || "";
     generation.value++;
+    vmReady.value = true;
+    await refresh();
   } catch (e) {
-    error.value = e.message;
+    if (base === apiBase.value) error.value = e.message;
   }
 }
 function fullscreen() {
@@ -160,14 +192,17 @@ function fullscreen() {
 }
 async function connect() {
   try {
-    let session = await api("session");
+    let session = await api("session", undefined, true, "");
     if (!session.authenticated) {
       if (!token) throw new Error("Open a private console login link first.");
-      session = await api("session", { token });
+      session = await api("session", { token }, false, "");
     }
     password.value = session.viewer_password || password.value;
     authenticated.value = true;
-    await refresh();
+    consoles.value = session.consoles || [
+      { id: "local", label: "Current VM", prefix: "" },
+    ];
+    await selectConsole(consoles.value[0].id);
   } catch (e) {
     error.value = e.message;
   }
@@ -180,6 +215,7 @@ onMounted(async () => {
   timer = setInterval(refresh, 4000);
 });
 onUnmounted(() => {
+  viewerObserver?.disconnect();
   clearInterval(timer);
   clearInterval(clockTimer);
 });
@@ -189,6 +225,18 @@ onUnmounted(() => {
   <div class="shell">
     <header class="topbar">
       <div class="brand">Live Transcript <span>VM console</span></div>
+      <label v-if="consoles.length > 1" class="vm-selector">
+        <span>VM</span>
+        <select
+          :value="selected"
+          :disabled="busy"
+          @change="selectConsole($event.target.value)"
+        >
+          <option v-for="item in consoles" :key="item.id" :value="item.id">
+            {{ item.label }}
+          </option>
+        </select>
+      </label>
       <div class="session-badges">
         <span class="badge" :class="{ good: connected }"
           ><i />{{ connected ? "Connected" : "Disconnected" }}</span
@@ -219,7 +267,7 @@ onUnmounted(() => {
         </div>
         <div class="viewer-frame">
           <iframe
-            v-if="authenticated"
+            v-if="authenticated && vmReady"
             :key="generation"
             ref="viewer"
             :src="viewerUrl"

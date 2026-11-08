@@ -101,6 +101,8 @@ See [console operations](docs/operator-console.md) and the
 sharing the console link before a meeting.
 
 For concurrent recordings, provision a separate VM/profile for each meeting.
+Use [the console hub](docs/multiple-meetings.md#one-ui-for-several-vms) to switch
+between several VMs in one page, with one login and the selected VM's controls.
 See [multiple meetings and bridging](docs/multiple-meetings.md) for isolation,
 shared speech-service capacity, and the proposed fleet/bridge architecture.
 

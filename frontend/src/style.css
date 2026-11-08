@@ -74,6 +74,21 @@ a {
   gap: 9px;
   margin: 0 0 0 auto;
 }
+.vm-selector {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #9facc2;
+  font-size: 13px;
+}
+.vm-selector select {
+  background: #151e2d;
+  border: 1px solid #2c374a;
+  border-radius: 6px;
+  color: #e6eaf1;
+  padding: 7px 10px;
+  max-width: 220px;
+}
 .badge {
   display: flex;
   align-items: center;

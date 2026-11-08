@@ -262,6 +262,16 @@ def main(argv=None):
         help="host listen address; use 0.0.0.0 explicitly for VPN/LAN access",
     )
     console.add_argument("--advertise-host", help="VPN/LAN address to put in the viewer link")
+    hub = commands.add_parser("console-hub", help="view several existing VM consoles in one UI")
+    hub.add_argument(
+        "--console",
+        action="append",
+        required=True,
+        help="named local console, e.g. main=6081; repeat for each VM",
+    )
+    hub.add_argument("--listen", default="127.0.0.1")
+    hub.add_argument("--port", type=int, default=6080)
+    hub.add_argument("--advertise-host", help="same VPN/LAN host used by the existing consoles")
     say = commands.add_parser("say", help="explicit TTS request, never automatic")
     say.add_argument("text")
     say.add_argument("--lang", choices=("en", "de"), default="en")
@@ -320,6 +330,10 @@ def main(argv=None):
                     emit(value)
 
             console_emit(open_console(args, console_emit))
+        elif args.command == "console-hub":
+            from live_transcript.runtime.operator import run_hub
+
+            run_hub(args, lambda value: print(json.dumps(value), flush=True))
         elif args.command == "config":
             emit(runtime_config.CONFIG, args.json)
         elif args.command == "doctor":
