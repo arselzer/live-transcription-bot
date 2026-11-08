@@ -449,19 +449,37 @@ def tick(state, dry_run=False):
     return issues
 
 
-def deliver(state, issues, dry_run=False):
+def deliver(state, issues, dry_run=False, edge_keys=()):
     now = time.time()
     old = state.get("issues", {})
+    edge = state.get("edge", {})
+    edge_keys = set(edge_keys)
     current = {}
     messages = []
     for key, value in issues.items():
         previous = old.get(key, {})
         fingerprint = hashlib.sha256(value.encode()).hexdigest()
-        if now - previous.get("at", 0) >= COOLDOWN or previous.get("fingerprint") != fingerprint:
+        if key in edge_keys:
+            # Steady-state conditions (postprocess outcomes, backend holds)
+            # are edge-triggered: announced once until the text changes or
+            # the condition clears. They are not incidents to remind about.
+            if edge.get(key) == fingerprint:
+                current[key] = previous
+                continue
+            messages.append((key, f"Live Transcript [{key}]: {value}"))
+            previous = dict(at=now, fingerprint=fingerprint)
+        elif now - previous.get("at", 0) >= COOLDOWN or previous.get("fingerprint") != fingerprint:
             messages.append((key, f"Live Transcript [{key}]: {value}"))
             previous = dict(at=now, fingerprint=fingerprint)
         current[key] = previous
     state["issues"] = current
+    # Cleared conditions drop out of the edge cursor and may re-announce if
+    # they recur; unchanged ongoing conditions stay silent.
+    state["edge"] = {
+        key: hashlib.sha256(value.encode()).hexdigest()
+        for key, value in issues.items()
+        if key in edge_keys
+    }
     from live_transcript.integrations.notifications import enqueue
 
     notifications = [] if dry_run else enqueue(state, messages, now)
@@ -526,11 +544,14 @@ def main(argv=None):
         except Exception as exc:
             issues = {"watchdog-error": f"{type(exc).__name__}; no process-wide cleanup attempted"}
         issues.update(backend_issues)
-        issues.update(recovery_issues())
+        edge_keys = set(backend_issues)
+        recovered = recovery_issues()
+        issues.update(recovered)
+        edge_keys.update(recovered)
         from live_transcript.runtime.operator import console_notifications
 
         issues.update(console_notifications(state))
-        report = deliver(state, issues, a.dry_run)
+        report = deliver(state, issues, a.dry_run, edge_keys)
         if a.json:
             print(json.dumps(report, ensure_ascii=False), flush=True)
         elif report["messages"]:

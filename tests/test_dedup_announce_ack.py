@@ -174,5 +174,43 @@ class AckAfterPrintTests(unittest.TestCase):
                 ack.assert_not_called()
 
 
+class EdgeDeliveryTests(unittest.TestCase):
+    def test_steady_condition_announces_once_not_every_cooldown(self):
+        from live_transcript.runtime.watchdog import deliver
+
+        state = {}
+        issues = {"speech-backend-primary": "held by systemd conditions"}
+        first = deliver(state, issues, False, ["speech-backend-primary"])
+        self.assertEqual(len(first["messages"]), 1)
+        # Simulate the cooldown having fully expired while nothing changed.
+        state["issues"]["speech-backend-primary"]["at"] -= 10_000
+        again = deliver(state, issues, False, ["speech-backend-primary"])
+        self.assertEqual(again["messages"], [])
+        # Text change is a new edge and announces again.
+        changed = deliver(
+            state, {"speech-backend-primary": "start rejected"}, False, ["speech-backend-primary"]
+        )
+        self.assertEqual(len(changed["messages"]), 1)
+        # Cleared condition resets the cursor; recurrence re-announces.
+        cleared = deliver(state, {}, False, ["speech-backend-primary"])
+        self.assertEqual(cleared["messages"], [])
+        self.assertEqual(state["edge"], {})
+        recurrence = deliver(
+            state, {"speech-backend-primary": "start rejected"}, False, ["speech-backend-primary"]
+        )
+        self.assertEqual(len(recurrence["messages"]), 1)
+
+    def test_incident_keys_still_repeat_after_cooldown(self):
+        from live_transcript.runtime import watchdog
+
+        state = {}
+        issues = {"vm-unreachable": "virsh domain not running"}
+        first = watchdog.deliver(state, issues, False)
+        self.assertEqual(len(first["messages"]), 1)
+        state["issues"]["vm-unreachable"]["at"] -= watchdog.COOLDOWN + 1
+        again = watchdog.deliver(state, issues, False)
+        self.assertEqual(len(again["messages"]), 1)
+
+
 if __name__ == "__main__":
     unittest.main()
