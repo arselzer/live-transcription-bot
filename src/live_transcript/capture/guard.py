@@ -195,6 +195,15 @@ class Archive:
             audio_segment_seconds=5,
             audio_source=audio_source,
         )
+        # Pin UI text to this desktop lifetime, not just a reusable display
+        # number. Failure to discover the desktop must never prevent capture.
+        try:
+            from live_transcript.runtime.console import displays
+
+            matches = [item for item in displays() if item["display"] == config["display"]]
+            config["desktop"] = matches[0] if len(matches) == 1 else None
+        except (OSError, ValueError):
+            config["desktop"] = None
         atomic_json(self.root / "config.json", config)
         cmd = [
             "systemd-run",

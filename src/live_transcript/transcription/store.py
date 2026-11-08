@@ -6,6 +6,8 @@ packets; per-stream receipts survive packet retirement and daemon restarts.
 """
 
 import base64
+from contextlib import contextmanager
+import fcntl
 import hashlib
 import json
 import os
@@ -13,6 +15,27 @@ from pathlib import Path
 import sqlite3
 import threading
 import time
+
+
+@contextmanager
+def journal_owner(path):
+    """One decoder owner across native/container deployments of the same state."""
+    path = Path(path).resolve()
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    descriptor = os.open(str(path) + ".owner.lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    try:
+        if os.fstat(descriptor).st_uid != os.geteuid():
+            raise RuntimeError("Caption journal lock belongs to another user")
+        try:
+            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise RuntimeError("Another caption service owns this journal") from exc
+        os.fchmod(descriptor, 0o600)
+        yield
+    finally:
+        # Keep the inode in place: unlinking a lock lets a new process acquire a
+        # different inode while an existing decoder still owns the old one.
+        os.close(descriptor)
 
 
 def encode_state(st):

@@ -8,6 +8,14 @@ from tools.check_public_source import audit, check_blob
 
 
 class PrivacyTests(unittest.TestCase):
+    def test_only_exact_reviewed_demo_bytes_are_allowed_as_binary(self):
+        root = Path(__file__).resolve().parents[1]
+        name = "docs/assets/workspace-demo.gif"
+        data = (root / name).read_bytes()
+        self.assertEqual(check_blob(name, data), [])
+        self.assertEqual(check_blob(name, data + b"extra")[0]["category"], "unreviewed-media")
+        self.assertEqual(check_blob("docs/other.gif", data)[0]["category"], "binary-content")
+
     def test_findings_never_echo_the_sensitive_value(self):
         private = "fixture-" + "private-identifier"
         findings = check_blob("source.py", ("value = " + repr(private)).encode(), [private])

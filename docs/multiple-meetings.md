@@ -43,7 +43,7 @@ live-transcript --config /path/to/meeting-a.toml console-hub \
 ```
 
 Open the private link printed by `console-hub` and select a VM in the header.
-The browser view, paste actions, recording status and activity follow that VM.
+The transcript, browser view, paste actions, recording status and activity follow that VM.
 Switching views clears pending paste text and does not stop either recording.
 The hub proxies the viewer and WebSocket connections through one browser origin.
 Console names are configurable lowercase identifiers; names and ports are not

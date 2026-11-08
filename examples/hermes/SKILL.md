@@ -39,7 +39,10 @@ meeting links, identities, paths, or messaging credentials.
 ## Console and recovery
 
 Once a meeting display exists, run `live-transcript --json console`. Supervise it
-separately; share its full private URL only in the authorized conversation.
+separately. Its URL opens the live transcript workspace; use **VM console** for
+manual admission and paste controls. A recovery incident opens that tab once,
+while watchdog notification delivery remains necessary for unattended viewers.
+Share its full private URL only in the authorized conversation.
 Use view-only mode during automatic joining. Use `console --control` to
 intervene; this pauses eligible automatic UI actions and leaves capture running.
 Do not use `console --idle` to prepare a scheduled meeting: its diagnostic

@@ -9,6 +9,12 @@ hostname, lifetime, display, and control options.
 
 ## Everyday use
 
+The default view is now the live transcript workspace; **VM console** opens the
+desktop and paste controls. See the [workspace walkthrough](workspace.md) for
+search, follow-live, transcript export and draft notes. Both views share the same
+authenticated session and recording status. Text access is scoped to the pinned
+VM archive, with no client-selected journal path or session ID.
+
 For several VMs in one page, use [the console hub](multiple-meetings.md#one-ui-for-several-vms).
 
 1. Run `live-transcript start 'INVITATION'` in your usual supervisor.

@@ -4,6 +4,12 @@ The browser remains isolated in a VM. The supported default is a managed VM plus
 native host speech services. Docker Compose is an optional host speech supervisor,
 not a replacement for browser isolation. Hermes is a client of the public CLI.
 
+The [portable backend export](container-backend.md) also packages the caption
+daemon and durable journal with CPU speech. It removes host apt/systemd coupling
+for those services; the VM/controller and final-processing boundaries remain
+explicit. The journal is a persistent local bind mount with one owner, and model
+failure cannot prevent caption ingest from starting.
+
 ## Approaches considered
 
 | Approach | Benefits | Costs and failure boundaries | Decision |

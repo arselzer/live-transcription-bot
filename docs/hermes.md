@@ -84,6 +84,13 @@ console. The core application never calls a messaging provider.
 
 ## Console links and early joining
 
+The same console URL opens the [meeting workspace](workspace.md): live transcript
+first, with a VM console tab for admission and recovery. Share the full private
+URL only in the authorized conversation. A new `needs_operator` incident opens
+the console tab once; the agent should also deliver its existing recovery alert
+for users who are not watching the page. The transcript UI is an observer, not
+a substitute for watchdog delivery or durable recording.
+
 Start the meeting using the normal `start` command, or let calendar dispatch
 start it early. As soon as its browser display exists, supervise
 `live-transcript --json console --listen 0.0.0.0 --advertise-host HOST --port PORT`

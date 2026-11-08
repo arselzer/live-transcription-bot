@@ -75,6 +75,8 @@ def wav_to_pcm(data: bytes) -> bytes:
 
 
 def qwen(sysmsg, user, maxtok=200):
+    if not get("model", "enabled"):
+        raise RuntimeError("Meeting notes model is disabled")
     body = json.dumps(
         {
             "model": get("model", "name"),
@@ -840,23 +842,24 @@ def worker(conn):
         conn.close()
 
 
-if __name__ == "__main__":
+def serve(database):
+    global RUNTIME
     from live_transcript.transcription.store import CaptionStore
     from live_transcript.transcription.runtime import CaptionRuntime
 
     os.umask(0o077)
     RUNTIME = CaptionRuntime(
         sys.modules[__name__],
-        CaptionStore(
-            os.environ.get("CAPTION_DB", os.path.join(get("paths", "state"), "captions.sqlite3"))
-        ),
+        CaptionStore(database),
     )
     RUNTIME.start()
     from live_transcript.notes.board import start_board
 
-    start_board(sys.modules[__name__], RUNTIME)
+    if get("model", "enabled"):
+        start_board(sys.modules[__name__], RUNTIME)
     threading.Thread(target=gpu_poller, daemon=True).start()
-    threading.Thread(target=ticker, daemon=True).start()
+    if get("model", "enabled"):
+        threading.Thread(target=ticker, daemon=True).start()
     srv = socket.socket()
     srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
     while (
@@ -876,3 +879,11 @@ if __name__ == "__main__":
     while True:
         c, _ = srv.accept()
         threading.Thread(target=worker, args=(c,), daemon=True).start()
+
+
+if __name__ == "__main__":
+    from live_transcript.transcription.store import journal_owner
+
+    database = os.environ.get("CAPTION_DB", os.path.join(get("paths", "state"), "captions.sqlite3"))
+    with journal_owner(database):
+        serve(database)

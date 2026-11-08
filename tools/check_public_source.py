@@ -18,6 +18,11 @@ import sys
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
+# Only this visually reviewed, synthetic documentation animation is allowed as
+# binary source. Replacing it requires an explicit new content review/hash.
+REVIEWED_MEDIA = {
+    "docs/assets/workspace-demo.gif": "696ec21d206d542844a1b027e6c0d59d36a9975271a92c4c55025f035735201a",
+}
 # The checker must also work before installation and during isolated builds.
 if str(ROOT / "src") not in sys.path:
     sys.path.insert(0, str(ROOT / "src"))
@@ -91,6 +96,12 @@ def check_blob(name, data, forbidden=()):
         return [finding("unsafe-path")]
     if len(data) > MAX_SOURCE_BYTES:
         return [finding("oversized-content")]
+    if name in REVIEWED_MEDIA:
+        if display != name:
+            return [finding("private-file-name")]
+        if hashlib.sha256(data).hexdigest() != REVIEWED_MEDIA[name]:
+            return [finding("unreviewed-media")]
+        return []
     if b"\0" in data:
         return [finding("binary-content")]
     try:

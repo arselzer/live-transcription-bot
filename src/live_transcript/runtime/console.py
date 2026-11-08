@@ -681,6 +681,8 @@ def guest_action(request):
                     latest = dict(
                         health,
                         archive_root=root,
+                        provider=config.get("provider", ""),
+                        desktop_matches=config.get("desktop") == target,
                         speaker_source="Speaker evidence: screen snapshots"
                         if not config.get("cdp")
                         else "Speaker evidence: browser + screen",
@@ -725,6 +727,11 @@ def guest_action(request):
             capture=capture,
             speech=speech,
             admission=admission,
+            session=dict(
+                id=latest["archive_root"].name.removesuffix(".archive"), provider=latest["provider"]
+            )
+            if latest and latest["desktop_matches"]
+            else None,
         )
     if not control:
         raise ValueError("A live manual-control lease is required")

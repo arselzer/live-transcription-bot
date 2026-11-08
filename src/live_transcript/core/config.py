@@ -96,7 +96,11 @@ DEFAULTS = {
         "gpu_device": "0",
         "metrics_device": "card0",
     },
-    "model": {"url": "http://127.0.0.1:8078/v1/chat/completions", "name": "local-model"},
+    "model": {
+        "enabled": True,
+        "url": "http://127.0.0.1:8078/v1/chat/completions",
+        "name": "local-model",
+    },
     "recovery": {
         "enabled": True,
         "model_enabled": True,

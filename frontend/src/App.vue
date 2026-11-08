@@ -1,5 +1,11 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
+import MeetingTranscript from "./MeetingTranscript.vue";
+const tab = ref("transcript"),
+  meeting = ref(null),
+  meetingError = ref(""),
+  lastMeetingAt = ref(0);
+let recoveryIncident = "";
 const state = ref(null),
   events = ref([]),
   error = ref(""),
@@ -161,19 +167,54 @@ async function refresh() {
   const request = { base, attempt };
   refreshing = request;
   try {
-    const [status, activity] = await Promise.all([
-      api("status", undefined, true, base),
-      api("events", undefined, true, base),
-    ]);
-    if (base !== apiBase.value || attempt !== connectionAttempt) return;
-    state.value = status;
-    lastStatusAt.value = Date.now();
-    now.value = Date.now();
-    events.value = activity.events;
-    statusError.value = "";
-  } catch (e) {
-    if (base === apiBase.value && attempt === connectionAttempt)
-      statusError.value = e.message;
+    const current = () =>
+      base === apiBase.value && attempt === connectionAttempt;
+    const status = api("status", undefined, true, base)
+      .then((value) => {
+        if (!current()) return false;
+        state.value = value;
+        lastStatusAt.value = Date.now();
+        now.value = Date.now();
+        statusError.value = "";
+        if (meeting.value?.session?.id !== value.session?.id)
+          meeting.value = null;
+        const admission = value.admission;
+        const incident =
+          admission?.stage === "needs_operator"
+            ? `${value.session?.id}:${admission.utc}`
+            : "";
+        if (incident && incident !== recoveryIncident) {
+          tab.value = "console";
+          recoveryIncident = incident;
+        }
+        return true;
+      })
+      .catch((e) => {
+        if (current()) statusError.value = e.message;
+        return false;
+      });
+    const activity = api("events", undefined, true, base).then((value) => {
+      if (current()) events.value = value.events;
+    });
+    const captions = api("meeting", undefined, true, base)
+      .then(async (value) => {
+        const statusOK = await status;
+        if (!current()) return;
+        if (statusOK && value.session?.id === state.value?.session?.id) {
+          if (value.status === "unavailable") {
+            meetingError.value =
+              "Caption journal is unavailable; recording is independent";
+            return;
+          }
+          meeting.value = value;
+          lastMeetingAt.value = Date.now();
+          meetingError.value = "";
+        } else meetingError.value = "Waiting for current meeting status";
+      })
+      .catch((e) => {
+        if (current()) meetingError.value = e.message;
+      });
+    await Promise.allSettled([status, activity, captions]);
   } finally {
     if (refreshing === request) refreshing = null;
   }
@@ -239,6 +280,11 @@ function attachViewer() {
 async function selectConsole(id) {
   if (busy.value || !consoles.value.some((item) => item.id === id)) return;
   selected.value = id;
+  meeting.value = null;
+  meetingError.value = "";
+  lastMeetingAt.value = 0;
+  recoveryIncident = "";
+  tab.value = "transcript";
   state.value = null;
   events.value = [];
   notice.value = "";
@@ -354,7 +400,7 @@ onUnmounted(() => {
 <template>
   <div class="shell">
     <header class="topbar">
-      <div class="brand">Live Transcript <span>VM console</span></div>
+      <div class="brand">Live Transcript <span>Meeting workspace</span></div>
       <label v-if="consoles.length > 1" class="vm-selector">
         <span>VM</span>
         <select
@@ -380,7 +426,22 @@ onUnmounted(() => {
     <main>
       <section class="workspace">
         <div class="section-heading">
-          <h1>Meeting browser</h1>
+          <div>
+            <h1>
+              {{
+                state?.session?.provider
+                  ? {
+                      google: "Google Meet",
+                      zoom: "Zoom",
+                      proton: "Proton Meet",
+                    }[state.session.provider]
+                  : "Meeting"
+              }}
+            </h1>
+            <p class="meeting-subtitle">
+              {{ admissionText || "Admission status not reported" }}
+            </p>
+          </div>
           <span class="mode" :class="{ active: control }">{{
             control ? "Keyboard and mouse enabled" : "View only"
           }}</span>
@@ -391,45 +452,83 @@ onUnmounted(() => {
             Retry
           </button>
         </div>
-        <div class="viewer-frame">
-          <iframe
-            v-if="authenticated && vmReady"
-            :key="generation"
-            ref="viewer"
-            :src="viewerUrl"
-            title="Isolated meeting browser"
-            allow="fullscreen; clipboard-read; clipboard-write"
-            @load="attachViewer"
-          />
-          <div v-else class="empty">
-            <h2>Connecting…</h2>
-            <p>Use the full console link to connect.</p>
-          </div>
-        </div>
-        <div class="viewer-toolbar">
-          <span
-            ><i :class="{ live: connected }" />{{ state?.display || "VM" }}
-            <span class="subtle"
-              >·
-              {{
-                control ? "Click inside to control the browser" : "View only"
-              }}</span
-            ></span
+        <nav class="workspace-tabs" aria-label="Meeting views">
+          <button
+            :aria-pressed="tab === 'transcript'"
+            @click="tab = 'transcript'"
           >
-          <div>
-            <button @click="reconnect" :disabled="!authenticated">
-              Reconnect</button
-            ><button @click="fullscreen" :disabled="!authenticated">
-              Fullscreen
-            </button>
-          </div>
+            Transcript
+          </button>
+          <button :aria-pressed="tab === 'console'" @click="tab = 'console'">
+            VM console
+            <span v-if="admission?.stage === 'needs_operator'" class="warning"
+              >· Needs you</span
+            >
+          </button>
+        </nav>
+        <div
+          v-if="admission?.stage === 'needs_operator'"
+          class="banner recovery"
+          role="status"
+        >
+          <span
+            >{{ admissionText }}.
+            {{
+              control
+                ? "Use the VM browser to finish joining."
+                : "Open a console with --control to finish joining."
+            }}</span
+          >
+          <button @click="tab = 'console'">Open console</button>
         </div>
-        <p class="workspace-note">
-          You can reconnect this view while recording continues.
-        </p>
+        <MeetingTranscript
+          v-show="tab === 'transcript'"
+          :active="tab === 'transcript'"
+          :meeting="meeting"
+          :error="meetingError"
+          :stale="!!lastMeetingAt && now - lastMeetingAt > 12000"
+        />
+        <div v-show="tab === 'console'">
+          <div class="viewer-frame">
+            <iframe
+              v-if="authenticated && vmReady"
+              :key="generation"
+              ref="viewer"
+              :src="viewerUrl"
+              title="Isolated meeting browser"
+              allow="fullscreen; clipboard-read; clipboard-write"
+              @load="attachViewer"
+            />
+            <div v-else class="empty">
+              <h2>Connecting…</h2>
+              <p>Use the full console link to connect.</p>
+            </div>
+          </div>
+          <div class="viewer-toolbar">
+            <span
+              ><i :class="{ live: connected }" />{{ state?.display || "VM" }}
+              <span class="subtle"
+                >·
+                {{
+                  control ? "Click inside to control the browser" : "View only"
+                }}</span
+              ></span
+            >
+            <div>
+              <button @click="reconnect" :disabled="!authenticated">
+                Reconnect</button
+              ><button @click="fullscreen" :disabled="!authenticated">
+                Fullscreen
+              </button>
+            </div>
+          </div>
+          <p class="workspace-note">
+            You can reconnect this view while recording continues.
+          </p>
+        </div>
       </section>
       <aside>
-        <section class="panel paste-panel">
+        <section v-show="tab === 'console'" class="panel paste-panel">
           <div class="panel-title">
             <h2>Paste into the VM</h2>
             <span class="keycap">⌘ / Ctrl V</span>

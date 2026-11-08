@@ -37,6 +37,9 @@ def validate_status(value):
     if not isinstance(value, dict):
         raise ValueError("VM status must be an object")
     value = deepcopy(value)
+    from live_transcript.runtime.meeting_view import validate_session
+
+    value["session"] = validate_session(value.get("session"))
 
     def number(data, key, *, required=False):
         if key not in data and not required:
@@ -417,6 +420,12 @@ class OperatorServer(ThreadingHTTPServer):
             authenticated=True, viewer_password=self.viewer_password, login_mode=self.auth.mode
         )
 
+    def meeting(self):
+        from live_transcript.core.config import get
+        from live_transcript.runtime.meeting_view import read
+
+        return read(Path(get("paths", "state")) / "captions.sqlite3", self.status().get("session"))
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -571,6 +580,15 @@ class Handler(BaseHTTPRequestHandler):
             )
         if path == "/api/events":
             return self.reply(200, dict(events=self.server.events.recent()))
+        if path == "/api/meeting":
+            import sqlite3
+
+            try:
+                return self.reply(200, self.server.meeting())
+            except (sqlite3.Error, ValueError, RuntimeError, OSError, subprocess.SubprocessError):
+                return self.reply(
+                    503, dict(error="Live transcript is unavailable; recording is independent")
+                )
         if path == "/api/status":
             try:
                 return self.reply(200, self.server.status())
@@ -702,7 +720,7 @@ class HubHandler(Handler):
     def do_GET(self):
         if self.path.startswith("/vm/"):
             return self.forward("GET")
-        if urlsplit(self.path).path in ("/api/status", "/api/events"):
+        if urlsplit(self.path).path in ("/api/status", "/api/events", "/api/meeting"):
             return self.reply(404, dict(error="Select a VM first"))
         super().do_GET()
 
@@ -726,7 +744,8 @@ class HubHandler(Handler):
         port, path = target
         socket_request = self.headers.get("Upgrade", "").lower() == "websocket"
         allowed = (
-            path in ("/api/session", "/api/status", "/api/events") or path.startswith("/novnc/")
+            path in ("/api/session", "/api/status", "/api/events", "/api/meeting")
+            or path.startswith("/novnc/")
             if method == "GET"
             else path in ("/api/action", "/api/interaction")
         )

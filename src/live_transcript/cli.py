@@ -313,6 +313,11 @@ def main(argv=None):
             "setup", help="provision a standalone installation and isolated browser VM"
         )
     )
+    from live_transcript.runtime.containers import export_options
+
+    export_options(
+        commands.add_parser("backend", help="export a portable Compose caption/speech backend")
+    )
     for name in ("check", "status", "config", "info"):
         command = commands.add_parser(name)
         if name == "check":
@@ -418,7 +423,11 @@ def main(argv=None):
         runtime_config.CONFIG = runtime_config.load()
         from live_transcript.core.config import get, ssh_options
 
-        if args.command == "console":
+        if args.command == "backend":
+            from live_transcript.runtime.containers import export_backend
+
+            emit(export_backend(args), args.json)
+        elif args.command == "console":
             from live_transcript.runtime.console import open_console
 
             def console_emit(value):

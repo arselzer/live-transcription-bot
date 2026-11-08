@@ -4,6 +4,13 @@ A self-hosted meeting recorder with live captions, meeting notes, a caption
 camera, and optional text-to-speech. Operate it with **`live-transcript`**.
 Zoom and Proton Meet adapters are included; Google Meet support is experimental.
 
+![Live transcript workspace demonstration](docs/assets/workspace-demo.gif)
+
+Synthetic demo with fictional participants: captions arrive, the reader searches
+the transcript, then switches to the isolated VM console. The workspace shows
+recording health separately from recognition, with optional draft meeting notes.
+See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
+
 ## Install and set up
 
 Automatic setup currently supports an x86-64 Linux host with KVM virtualization,
@@ -49,6 +56,10 @@ model weight, recording or credential is included in this repository.
 - **Compose speech:** `live-transcript setup --speech-supervisor compose` runs CPU
   speech services in Docker Compose. Browser, camera and original capture stay in
   the VM; the controller/caption service remain on the host.
+- **Portable backend:** `live-transcript backend OUTPUT --models MODEL_DIR --state STATE_DIR`
+  exports a Compose caption-and-CPU-speech stack. That backend needs Docker rather
+  than host apt packages or systemd. VM provisioning, controller and final
+  processing remain separate; see [container backend setup](docs/container-backend.md).
 - **Existing infrastructure:** configure a prepared VM and existing speech endpoints
   using [config.example.toml](config.example.toml) and [deployment](docs/deployment.md).
   Empty names under `[services]` disable local service management for externally
@@ -77,9 +88,11 @@ live-transcript --json console --control --listen 0.0.0.0 \
 ```
 
 Open the printed private URL. It includes the authentication token and VNC
-password in its fragment. Keep that full link private. The Vue interface has a
-scaled VM viewer, one-step text paste, keyboard shortcuts, fullscreen/reconnect,
-recording health, available storage, speech queue/signal status, and activity.
+password in its fragment. Keep that full link private. The workspace opens with
+searchable live captions, speaker labels, adjustable text size, follow-live and
+text export. Optional draft notes appear below the transcript. The **VM console**
+tab has the scaled viewer, one-step paste, keyboard shortcuts and reconnect.
+Recording health, storage, speech status and activity remain visible beside it.
 Select the destination field in the VM, then paste into the side panel; it never
 sends an Enter key. Node is needed only when rebuilding the UI, not to run it.
 

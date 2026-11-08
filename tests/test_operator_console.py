@@ -58,9 +58,25 @@ class ConsoleHTTPTests(unittest.TestCase):
         return headers["Set-Cookie"].split(";", 1)[0]
 
     def test_private_api_and_viewer_require_session(self):
-        for path in ("/api/status", "/api/events", "/novnc/vnc.html", "/novnc/websockify"):
+        for path in (
+            "/api/status",
+            "/api/events",
+            "/api/meeting",
+            "/novnc/vnc.html",
+            "/novnc/websockify",
+        ):
             self.assertEqual(self.request("GET", path)[0], 401)
         self.bridge.call.assert_not_called()
+
+    def test_meeting_journal_failures_do_not_break_vm_status(self):
+        cookie = self.login()
+        with patch.object(
+            self.server, "meeting", side_effect=ValueError("private invalid checkpoint")
+        ):
+            code, _, body = self.request("GET", "/api/meeting", cookie=cookie)
+            self.assertEqual(code, 503)
+            self.assertNotIn(b"private invalid", body)
+        self.assertEqual(self.request("GET", "/api/status", cookie=cookie)[0], 200)
 
     def test_two_vm_consoles_keep_independent_logins_in_one_browser_cookie_jar(self):
         second = OperatorServer(
@@ -360,7 +376,9 @@ class GuestControlTests(unittest.TestCase):
             (bad / "health.json").write_text("null")
             active = home / "rec/active.archive"
             active.mkdir()
-            (active / "config.json").write_text(json.dumps(dict(display=":88", cdp="")))
+            (active / "config.json").write_text(
+                json.dumps(dict(display=":88", cdp="", desktop=target))
+            )
             (active / "health.json").write_text(
                 json.dumps(
                     dict(
@@ -390,6 +408,15 @@ class GuestControlTests(unittest.TestCase):
                 patch("live_transcript.core.config.get", return_value=str(home)),
             ):
                 result = guest_action(dict(op="status", target=target))
+                self.assertEqual(result["session"]["id"], "active")
+                (active / "config.json").write_text(
+                    json.dumps(
+                        dict(display=":88", cdp="", desktop=dict(target, start_ticks="old-desktop"))
+                    )
+                )
+                reused = guest_action(dict(op="status", target=target))
+                self.assertIsNone(reused["session"])
+                self.assertIsNotNone(reused["capture"])
             self.assertEqual(result["admission"]["stage"], "needs_operator")
             self.assertTrue(result["capture"]["audio"]["running"])
             self.assertNotIn("fixture-private-content", json.dumps(result))
@@ -666,6 +693,17 @@ class ConsoleHubTests(unittest.TestCase):
             code, _, body = self.request("GET", f"/vm/{ident}/api/status", cookie=cookie)
             self.assertEqual(code, 200)
             self.assertEqual(json.loads(body)["display"], f":{70 + index}")
+
+    def test_hub_routes_meeting_text_to_only_the_selected_backend(self):
+        cookie = self.login()
+        for index, ident in enumerate(("first", "second")):
+            with patch.object(
+                self.backends[index], "meeting", return_value=dict(session=dict(id=ident), lines=[])
+            ):
+                code, _, body = self.request("GET", f"/vm/{ident}/api/meeting", cookie=cookie)
+                self.assertEqual(code, 200)
+                self.assertEqual(json.loads(body)["session"]["id"], ident)
+        self.assertEqual(self.request("GET", "/api/meeting", cookie=cookie)[0], 404)
 
     def test_paste_targets_only_selected_vm_and_origin_is_checked(self):
         cookie = self.login()

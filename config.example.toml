@@ -74,6 +74,7 @@ silence_finalize = 3.5
 commit_once = true
 
 [model]
+enabled = true # Disable live notes/tickers when no notes endpoint is configured.
 url = "http://127.0.0.1:8078/v1/chat/completions"
 name = "local-model"
 

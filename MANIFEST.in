@@ -159,3 +159,12 @@ include docs/multiple-meetings.md
 include src/live_transcript/integrations/notifications.py
 include examples/hermes/SKILL.md
 include tests/test_dedup_announce_ack.py
+include frontend/src/MeetingTranscript.vue
+include src/live_transcript/runtime/meeting_view.py
+include src/live_transcript/runtime/backend.Dockerfile
+include tests/test_meeting_view.py
+include tests/test_backend_export.py
+include tools/demo_operator_ui.py
+include docs/container-backend.md
+include docs/workspace.md
+include docs/assets/workspace-demo.gif

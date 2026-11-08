@@ -33,4 +33,4 @@ target-version = "py311"
 select = ["F", "E9"]
 
 [tool.setuptools.package-data]
-live_transcript = ["runtime/launch.sh", "runtime/guest-bootstrap.sh", "runtime/whisper.Dockerfile", "operator_ui/*"]
+live_transcript = ["runtime/launch.sh", "runtime/guest-bootstrap.sh", "runtime/*.Dockerfile", "operator_ui/*"]

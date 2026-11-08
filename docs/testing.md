@@ -194,3 +194,22 @@ Compose configuration, model mounts and endpoint readiness are separate checks
 from browser isolation. No browser runs in a container. Existing installations
 and live meeting services must not be stopped to run these drills; each test owns
 its profile, VM, service names and ports.
+
+## Workspace and portable backend
+
+The synthetic workspace walkthrough runs the packaged frontend and authenticated
+API against a disposable journal. It verifies search, text download, follow-live,
+VM viewer persistence across tabs, admission handoff without repeated forced tab
+changes, and narrow layouts. Its reviewed README animation uses only fixture text
+and participant labels; reproduce it with `python -m tools.demo_operator_ui`.
+
+The November 8 CPU backend drill built both images and exercised their non-root,
+read-only runtime with durable local state. With both speech workers stopped,
+caption ingest still acknowledged a committed test packet. Killing/replacing the
+caption process preserved the packet receipt; replay did not duplicate it, and
+recognition resumed after speech recovery. A second decoder, both from the host
+and from another container, failed to claim the same journal ownership lock.
+The final generated bundle passed Compose health checks. Test containers were
+removed while retaining their journal and validation evidence. This establishes
+that recovery path on Linux x86-64 Docker Engine, not cross-platform deployment,
+meeting-provider admission or a word-accuracy benchmark.
