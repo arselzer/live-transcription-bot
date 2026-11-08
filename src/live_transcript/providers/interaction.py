@@ -134,7 +134,7 @@ class NativeInput:
         self.run("mousemove", "--sync", x, y)
         self.page.wait_for_timeout(80)
         self.trusted_page()
-        if not control.evaluate(HIT_JS, target):
+        if not control.evaluate(HIT_JS, target, timeout=2000):
             raise NativeInputError("Pointer did not reach the original join control; click refused")
         return target
 
@@ -145,15 +145,24 @@ class NativeInput:
             window = re.search(r"^WINDOW=(\d+)$", raw, re.M)
             if not window or int(window[1]) <= 1:
                 raise NativeInputError("The verified browser window has no X input target")
-            self.run("windowfocus", "--sync", window[1])
+            # Chrome may report a renderer child as the pointer's X window.
+            # Waiting for X input focus to equal that child can never complete,
+            # even when the page already has focus. Verify the page instead.
+            if self.page.evaluate("() => document.hasFocus()") is not True:
+                self.run("windowfocus", window[1])
+                deadline = time.monotonic() + 1
+                while self.page.evaluate("() => document.hasFocus()") is not True:
+                    if time.monotonic() >= deadline:
+                        raise NativeInputError("The verified meeting page did not receive focus")
+                    self.page.wait_for_timeout(50)
             self.trusted_page()
-            if not control.evaluate(HIT_JS, target):
+            if not control.evaluate(HIT_JS, target, timeout=2000):
                 raise NativeInputError("Join control changed while focusing its window")
             self.run("click", "--clearmodifiers", 1)
         except NativeInputError:
             raise
         except Exception as exc:
-            if any(
+            if type(exc).__name__ == "TimeoutError" or any(
                 value in str(exc).lower()
                 for value in (
                     "not attached to the dom",

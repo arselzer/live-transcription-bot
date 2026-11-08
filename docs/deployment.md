@@ -205,6 +205,13 @@ Workspace policy can impose further limits. A denial is terminal and saves
 private screenshot/reason evidence. The application does not rename itself or
 repeatedly retry a rejected Google admission.
 
+A successful manual guest join does not establish that unattended joining will
+work. Tests have observed automatic re-entry in an already-admitted browser,
+followed by refusal after restarting it, even with the guest profile and browser
+storage retained. Persistent guest state is therefore not a supported admission
+fix. Keep the operator console available for recovery, and validate unattended
+admission separately before relying on Google Meet for a scheduled recording.
+
 ## Storage
 
 `paths.root` is the data workspace, independent of the source installation.

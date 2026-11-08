@@ -18,6 +18,8 @@ SNAPSHOT_JS = """includeText => {
   const label=e=>(e.getAttribute('aria-label')||e.getAttribute('title')||e.innerText||'').trim().slice(0,160);
   const controls=root=>[...root.querySelectorAll('button,[role=button]')].filter(visible).slice(0,150).map(label);
   return {controls:controls(document), locale:document.documentElement.lang||'',
+    join_controls:[...document.querySelectorAll('button,[role=button]')].filter(visible)
+      .map(e=>(e.innerText||'').trim()).filter(t=>/^(Join now|Ask to join)$/i.test(t)),
     notices:[...document.querySelectorAll('[role=dialog],[role=alertdialog]')].filter(visible)
       .slice(0,10).map(e=>({text:e.innerText.slice(0,1600),controls:controls(e)})),
     statuses:[...document.querySelectorAll('h1,h2,[role=heading],[role=status]')].filter(visible)
@@ -106,6 +108,11 @@ def inspect(page, include_text=True):
 
 def classify(data, *, require_sign_in=False, url="", refusal=None):
     controls = {label(value) for value in data.get("controls", []) if isinstance(value, str)}
+    controls.update(
+        label(value)
+        for value in data.get("join_controls", [])
+        if isinstance(value, str) and label(value) in ("join now", "ask to join")
+    )
     if isinstance(url, str) and url and not provider_origin("google", url):
         return AdmissionState(
             "operator",
@@ -274,6 +281,15 @@ def prejoin(page, name, timeout=330, *, interaction=None, require_sign_in=False,
                                 handled_notices.add(text)
                                 break
             elif state.stage == "prejoin" and not submitted:
+                # Recording listens to playback, not the microphone. Meet may
+                # put this media setup dialog over an otherwise visible form.
+                # Clear that known dialog before targeting the underlying name.
+                controls = {label(value) for value in data.get("controls", [])}
+                if "continue without microphone" in controls and click(
+                    "Continue without microphone"
+                ):
+                    page.wait_for_timeout(250)
+                    continue
                 click("Got it")
                 field = page.get_by_role("textbox").first
                 if field.is_visible() and (not entered or field.input_value() == ""):
@@ -303,6 +319,9 @@ def prejoin(page, name, timeout=330, *, interaction=None, require_sign_in=False,
                     url=page.url,
                     refusal=getattr(page, "_lt_google_refusal", None),
                 )
+                if verdict.stage == "admitted":
+                    checkpoint(page, diagnostics, verdict, latest)
+                    return
                 if verdict.stage in ("rejected", "operator"):
                     checkpoint(page, diagnostics, verdict, latest)
                     raise AdmissionRefused(

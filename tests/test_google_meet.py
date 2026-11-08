@@ -13,6 +13,65 @@ from live_transcript.providers.google_meet import is_google_url, validate_url, p
 
 
 class GoogleMeetTests(unittest.TestCase):
+    def test_remembered_guest_join_with_extended_accessibility_label_is_prejoin(self):
+        state = google_ui.classify(
+            dict(
+                controls=["Join now without camera"],
+                join_controls=["Join now"],
+                name_field=False,
+            )
+        )
+        self.assertEqual(state.stage, "prejoin")
+        unrelated = google_ui.classify(dict(controls=["Consent"], body="Join now"))
+        self.assertEqual(unrelated.stage, "loading")
+
+    def test_admission_during_native_target_failure_wins_over_input_error(self):
+        from live_transcript.providers.interaction import NativeInputError
+
+        page = MagicMock(url="https://meet.google.com/abc-abcd-efg")
+        page._lt_google_refusal = None
+        page.evaluate.side_effect = [
+            dict(controls=["Join now"], name_field=True),
+            dict(controls=["Leave call", "Participants"]),
+        ]
+        interaction = MagicMock()
+        interaction.click.side_effect = NativeInputError("target disappeared")
+        with patch.object(google_ui, "joined", return_value=False):
+            google_ui.prejoin(page, "Recorder", interaction=interaction)
+        self.assertEqual(interaction.click.call_count, 1)
+
+    def test_media_dialog_is_cleared_before_entering_guest_name(self):
+        page = MagicMock()
+        page.evaluate.side_effect = [
+            dict(controls=["Continue without microphone", "Join now"], name_field=True),
+            dict(controls=["Join now"], name_field=True),
+        ]
+        actions = []
+
+        def click(_, label):
+            actions.append(label)
+            return (
+                label == "Continue without microphone" if len(actions) == 1 else label == "Join now"
+            )
+
+        with (
+            patch.object(google_ui, "joined", side_effect=[False, False, True]),
+            patch.object(google_ui, "click_if_visible", side_effect=click),
+        ):
+            google_ui.prejoin(page, "Recorder")
+        self.assertEqual(actions[0], "Continue without microphone")
+        page.get_by_role.return_value.first.fill.assert_called_once_with("Recorder")
+
+    def test_native_target_timeout_is_reobserved_without_dispatching_click(self):
+        from live_transcript.providers.interaction import NativeInput, NativeTargetChanged
+
+        interaction = NativeInput.__new__(NativeInput)
+        interaction.move_to = MagicMock(side_effect=TimeoutError("original target disappeared"))
+        interaction.run = MagicMock()
+        with self.assertRaises(NativeTargetChanged):
+            interaction.click(MagicMock())
+        interaction.run.assert_not_called()
+
     def test_native_media_mode_installs_no_browser_hooks(self):
         context = MagicMock()
         with patch.object(google_meet, "get", return_value=False):
@@ -341,6 +400,45 @@ class GoogleStateTests(unittest.TestCase):
 
 
 class NativeInputTests(unittest.TestCase):
+    def test_focused_page_does_not_wait_for_renderer_child_to_gain_x_focus(self):
+        from live_transcript.providers.interaction import NativeInput
+
+        interaction = NativeInput.__new__(NativeInput)
+        interaction.page = MagicMock(url="https://meet.google.com/abc-abcd-efg")
+        interaction.page.evaluate.return_value = True
+        interaction.move_to = MagicMock(return_value=dict(x=10, y=20))
+        interaction.run = MagicMock(return_value="WINDOW=123")
+        control = MagicMock()
+        control.evaluate.return_value = True
+        interaction.click(control)
+        self.assertNotIn("windowfocus", [c.args[0] for c in interaction.run.call_args_list])
+        interaction.run.assert_called_with("click", "--clearmodifiers", 1)
+
+    def test_unfocused_page_is_verified_before_native_click(self):
+        from live_transcript.providers.interaction import NativeInput
+
+        interaction = NativeInput.__new__(NativeInput)
+        interaction.page = MagicMock(url="https://meet.google.com/abc-abcd-efg")
+        interaction.page.evaluate.side_effect = [False, True]
+        interaction.move_to = MagicMock(return_value=dict(x=10, y=20))
+        interaction.run = MagicMock(return_value="WINDOW=123")
+        interaction.click(MagicMock())
+        interaction.run.assert_any_call("windowfocus", "123")
+        interaction.run.assert_called_with("click", "--clearmodifiers", 1)
+
+    def test_missing_page_focus_stops_before_native_click(self):
+        from live_transcript.providers.interaction import NativeInput, NativeInputError
+
+        interaction = NativeInput.__new__(NativeInput)
+        interaction.page = MagicMock(url="https://meet.google.com/abc-abcd-efg")
+        interaction.page.evaluate.return_value = False
+        interaction.move_to = MagicMock(return_value=dict(x=10, y=20))
+        interaction.run = MagicMock(return_value="WINDOW=123")
+        with patch("live_transcript.providers.interaction.time.monotonic", side_effect=[0, 2]):
+            with self.assertRaisesRegex(NativeInputError, "did not receive focus"):
+                interaction.click(MagicMock())
+        self.assertNotIn("click", [c.args[0] for c in interaction.run.call_args_list])
+
     def test_coordinate_translation_uses_observed_offset_and_display_scale(self):
         from live_transcript.providers.interaction import NativeInput
 
