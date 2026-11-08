@@ -61,7 +61,7 @@ DEFAULTS = {
         "cpu_small": "whisper-stt-cpu-small.service",
     },
     "audio": {"sink": "transcript"},
-    "google": {"input_mode": "native", "admission_timeout": 330.0},
+    "google": {"input_mode": "native", "admission_timeout": 330.0, "browser_media_hooks": True},
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
     "console": {"login_mode": "isolated", "shared_login_file": "", "session_seconds": 7200},
     "caption": {

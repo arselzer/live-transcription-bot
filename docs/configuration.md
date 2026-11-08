@@ -28,11 +28,17 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | `audio` | Dedicated PulseAudio sink name; capture reads its monitor |
 | `browser` | Google launch mode, private context, optional guest Chrome executable |
 | `services` | Installation-scoped systemd units; empty names mean external supervision |
-| `google` | Native/DOM join input and bounded admission timeout |
+| `google` | Native/DOM join input, bounded admission timeout and optional browser media hooks |
 
 The launcher exports only guest-relevant settings to the guest's default config
 location. Host paths, vault and calendar settings are excluded. The launcher deploys the
 guest configuration separately from its application bundle.
+
+`google.browser_media_hooks=false` leaves the browser microphone and WebRTC APIs
+unmodified for admission diagnostics. It disables browser TTS and RTP counters;
+transport records report `available=false`. Native audio recording, screenshots,
+speaker observations and live transcription remain independent of these hooks.
+The default is `true`. This switch is diagnostic, not a proven admission fix.
 
 Existing `CAPTION_HOST`, `CAPTION_PORT`, `CAPTION_BIND`, `CAPTION_STT_URL`,
 `CAPTION_DB`, `CAPTION_CAP_FILE`, `LIVE_TRANSCRIPT_HOME` and `COMMIT_ONCE` environment

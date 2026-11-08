@@ -13,6 +13,23 @@ from live_transcript.providers.google_meet import is_google_url, validate_url, p
 
 
 class GoogleMeetTests(unittest.TestCase):
+    def test_native_media_mode_installs_no_browser_hooks(self):
+        context = MagicMock()
+        with patch.object(google_meet, "get", return_value=False):
+            self.assertFalse(google_meet.configure_media_hooks(context))
+        context.add_init_script.assert_not_called()
+
+    def test_media_hooks_include_transport_and_explicit_tts(self):
+        from live_transcript.speech.browser import MIC_SCRIPT
+
+        context = MagicMock()
+        with patch.object(google_meet, "get", return_value=True):
+            self.assertTrue(google_meet.configure_media_hooks(context))
+        self.assertEqual(
+            [call.args[0] for call in context.add_init_script.call_args_list],
+            [google_meet.PEERS_JS, MIC_SCRIPT],
+        )
+
     def test_valid_meeting_code_passes_unchanged(self):
         url = "https://meet.google.com/abc-abcd-efg"
         self.assertTrue(is_google_url(url))

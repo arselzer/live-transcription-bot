@@ -109,7 +109,8 @@ PEERS_JS = """(() => {
 })()"""
 
 STATS_JS = """async () => {
-  const stats = {audioBytes: 0, audioPackets: 0, audioEnergy: 0, states: []};
+  const stats = {available: Array.isArray(window.__liveTranscriptPeers),
+    audioBytes: 0, audioPackets: 0, audioEnergy: 0, states: []};
   await Promise.all((window.__liveTranscriptPeers || []).map(async pc => {
     stats.states.push(pc.connectionState);
     const report = await Promise.race([pc.getStats().catch(() => []),
@@ -124,6 +125,17 @@ STATS_JS = """async () => {
   }));
   return stats;
 }"""
+
+
+def configure_media_hooks(context):
+    """Allow admission comparisons with native microphone and WebRTC APIs."""
+    if not get("google", "browser_media_hooks"):
+        return False
+    from live_transcript.speech.browser import MIC_SCRIPT
+
+    context.add_init_script(PEERS_JS)
+    context.add_init_script(MIC_SCRIPT)
+    return True
 
 
 class Children:
@@ -196,7 +208,6 @@ def run(argv=None):
     if not os.environ.get("DISPLAY"):
         raise RuntimeError("Run under xvfb-run: headless Chromium cannot supply meeting audio")
     from playwright.sync_api import sync_playwright
-    from live_transcript.speech.browser import MIC_SCRIPT
     from live_transcript.speech.controller import VoiceController
     from live_transcript.capture.guard import Archive, event
 
@@ -252,8 +263,8 @@ def run(argv=None):
                             "google_auth_session_missing",
                         )
                 ctx.grant_permissions(["camera", "microphone"], origin=ORIGIN)
-                ctx.add_init_script(PEERS_JS)
-                ctx.add_init_script(MIC_SCRIPT)
+                media_hooks = configure_media_hooks(ctx)
+                print("GOOGLE_MEDIA_HOOKS", "enabled" if media_hooks else "disabled", flush=True)
                 pg = ctx.new_page()
                 pg.set_viewport_size({"width": 1280, "height": 800})
                 pg.on("dialog", lambda dialog: dialog.dismiss())
@@ -404,7 +415,11 @@ def run(argv=None):
                     ],
                     str(out) + ".screen.log",
                 )
-                voice = VoiceController(pg, out.stem, a.name, provider="google")
+                voice = (
+                    VoiceController(pg, out.stem, a.name, provider="google")
+                    if media_hooks
+                    else None
+                )
                 from live_transcript.providers.rescue import UIRescue
 
                 ui_rescue = UIRescue(archive.root, "google")
@@ -495,7 +510,8 @@ def run(argv=None):
                     who = optional_feature(lambda: pg.evaluate(SPEAKERS_JS), "live speakers", [])
                     with open(VM_HOME / "rec" / "speakers.jsonl", "a") as fh:
                         fh.write(json.dumps({"t": round(now - t0, 2), "who": who}) + "\n")
-                    optional_feature(voice.poll, "voice queue")
+                    if voice is not None:
+                        optional_feature(voice.poll, "voice queue")
                     if now >= next_stats:
                         if not archive.check():
                             print(
@@ -505,7 +521,11 @@ def run(argv=None):
                         stats = optional_feature(
                             lambda: pg.evaluate(STATS_JS),
                             "transport stats",
-                            {"audioBytes": last_audio_bytes, "states": ["unknown"]},
+                            {
+                                "available": False,
+                                "audioBytes": last_audio_bytes,
+                                "states": ["unknown"],
+                            },
                         )
                         stats["t"] = round(now - t0, 2)
                         stats["camera"] = optional_feature(

@@ -50,6 +50,8 @@ session_seconds = 7200
 # Native X11 input requires xdotool+xclip in the dedicated browser VM.
 input_mode = "native"
 admission_timeout = 330.0
+# Disable only for native-media diagnostics; browser TTS and RTP counters need these hooks.
+browser_media_hooks = true
 
 [browser]
 google_mode = "cdp"
