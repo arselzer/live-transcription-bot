@@ -171,3 +171,6 @@ include src/live_transcript/runtime/application.py
 include src/live_transcript/runtime/application.Dockerfile
 include tests/test_application_runtime.py
 include docs/application-deployment.md
+include src/live_transcript/runtime/qemu.py
+include src/live_transcript/runtime/vm.Dockerfile
+include tests/test_qemu.py

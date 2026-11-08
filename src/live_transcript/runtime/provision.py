@@ -146,14 +146,14 @@ def assert_domain_owner(xml, ident):
         )
 
 
-def cloud_config(public_key, host_private, host_public, ident, admin_key):
+def cloud_config(public_key, host_private, host_public, ident, admin_key, *, gateway_alias=False):
     script = files("live_transcript.runtime").joinpath("guest-bootstrap.sh").read_text()
     return (
         "#cloud-config\n"
         + json.dumps(
             dict(
                 hostname="live-transcript",
-                manage_etc_hosts=True,
+                manage_etc_hosts=not gateway_alias,
                 ssh_pwauth=False,
                 disable_root=False,
                 ssh_deletekeys=True,
@@ -178,7 +178,21 @@ def cloud_config(public_key, host_private, host_public, ident, admin_key):
                         content=script,
                     )
                 ],
-                runcmd=[["bash", "/opt/live-transcript/guest-bootstrap.sh", ident]],
+                runcmd=(
+                    [
+                        [
+                            "python3",
+                            "-c",
+                            "import json,subprocess,ipaddress; "
+                            "routes=json.loads(subprocess.check_output(['ip','-4','-j','route','show','default'])); "
+                            "gateway=str(ipaddress.ip_address(routes[0]['gateway'])); "
+                            "open('/etc/hosts','a').write('\\n'+gateway+' live-transcript-host\\n')",
+                        ]
+                    ]
+                    if gateway_alias
+                    else []
+                )
+                + [["bash", "/opt/live-transcript/guest-bootstrap.sh", ident]],
                 power_state=dict(mode="reboot", delay="now", timeout=30, condition=True),
             ),
             indent=2,

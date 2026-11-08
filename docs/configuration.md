@@ -93,6 +93,10 @@ local `paths.diarization_model` when enabled. Voice clustering is experimental.
 
 `vm.identity_file` and `vm.known_hosts` select installation-private SSH credentials
 and pinned host trust consistently for control, recording retrieval and mirrors.
+`vm.port` selects the SSH port (22 by default), including SCP and rsync.
+`caption.guest_host` optionally overrides `caption.host` in the deployed guest
+profile; the controller keeps its own host address. Managed Compose exports set
+these values automatically.
 `vm.python` selects the prepared guest's Python executable. Managed setup uses a
 dedicated virtual environment, leaving distribution Python packages untouched.
 `asr.primary_device="cpu"` gives the full primary CPU-appropriate timeouts and

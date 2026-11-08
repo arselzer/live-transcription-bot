@@ -16,11 +16,11 @@ See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
 | Starting point | Deployment |
 | --- | --- |
 | A prepared browser VM is available | [Docker application](docs/application-deployment.md): CLI, UI/backend, retrieval and final recognition in an image, with separate caption/speech services |
-| A new VM needs provisioning | [Native setup below](#native-setup) provisions the VM and media devices automatically |
+| A new VM needs provisioning | [Docker application with KVM](docs/application-deployment.md#provision-the-application-and-browser-vm): Compose provisions the guest and media devices; [native setup](#native-setup) is also available |
 | Only caption/speech packaging is needed | [Portable backend](docs/container-backend.md) |
 
 The Docker application host needs Git for the initial source build and Docker
-Engine/Compose. Python, FFmpeg, speech binaries and host systemd user services
+Engine/Compose, plus `/dev/kvm` when provisioning its VM. Python, FFmpeg, speech binaries and host systemd user services
 are packaged or replaced inside the deployment. The browser always stays in a VM.
 
 ## Native setup
@@ -65,7 +65,8 @@ model weight, recording or credential is included in this repository.
 ## Deployment choices
 
 - **Docker application:** `live-transcript --config VM_PROFILE deployment OUTPUT ...`
-  exports the full application and CPU backend for a prepared VM. It includes a
+  exports the full application and CPU backend for a prepared VM; add `--managed-vm`
+  to provision the guest with a QEMU/KVM sidecar. It includes a
   durable job supervisor and final recognition tools; host apt/Python/systemd are
   unnecessary at runtime. The [Docker-only bootstrap](docs/application-deployment.md#build-without-installing-python-on-the-host)
   also avoids installing Python to prepare it.
@@ -88,7 +89,7 @@ an already working vendor driver/toolchain; CPU setup needs no GPU software.
 Summaries use an optional OpenAI-compatible endpoint configured under `[model]`.
 TTS is optional and its voice assets are described in [deployment](docs/deployment.md#optional-tts).
 
-See the [architecture review](docs/deployment-architecture.md) for supervision,
+See [deployment architecture](docs/deployment-architecture.md) for supervision,
 container, recovery, storage, and deployment tradeoffs.
 
 ## View and control the VM
@@ -110,6 +111,8 @@ searchable live captions, speaker labels, adjustable text size, follow-live and
 text export. Optional draft notes appear below the transcript. The **VM console**
 tab has the scaled viewer, one-step paste, keyboard shortcuts and reconnect.
 Recording health, storage, speech status and activity remain visible beside it.
+**Listen** plays the selected VM’s meeting audio through your browser without
+enabling your microphone. Playback and recording have independent lifetimes.
 Select the destination field in the VM, then paste into the side panel; it never
 sends an Enter key. Node is needed only when rebuilding the UI, not to run it.
 

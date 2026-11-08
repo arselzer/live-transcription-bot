@@ -3,14 +3,15 @@
 The application image contains the CLI, workspace/API, SSH and retrieval tools,
 FFmpeg/fonts and the pinned CPU whisper.cpp binary used for final processing.
 Caption ingest and the two live speech workers run as separate services. The
-browser and independent audio/video recorder remain in a prepared VM.
+browser and independent audio/video recorder always run in a VM.
 
-The application host needs Docker Engine with Compose v2 and access to that VM.
-It does not need host Python, FFmpeg, whisper.cpp, a systemd user manager, or an
-apt-based distribution. Linux Docker Engine is the supported initial target;
-this deployment uses host networking for reliable access to the existing VM
-bridge and its console ports. Docker Desktop/rootless networking need separate
-validation. Guest systemd remains part of the prepared VM.
+On an x86-64 Linux host with Docker Engine, Compose v2 and working `/dev/kvm`,
+Compose can provision and run that VM too. Host Python, libvirt, FFmpeg, whisper.cpp,
+a systemd user manager and an apt-based host distribution are unnecessary. Initial
+setup needs internet access for the verified Ubuntu image, packages and models.
+Allow at least 24 GiB RAM and local space for the VM, models and recordings.
+Docker Desktop, rootless Docker, non-x86 hosts and SELinux volume labels need
+separate validation. The guest uses systemd; the application containers do not.
 
 ## Build without installing Python on the host
 
@@ -19,6 +20,7 @@ From a clean, reviewed checkout:
 ```bash
 git archive --format=tar HEAD | docker build \
   -f src/live_transcript/runtime/application.Dockerfile \
+  --build-arg APP_UID="$(id -u)" --build-arg APP_GID="$(id -g)" \
   -t live-transcript-app:local -
 ```
 
@@ -28,52 +30,85 @@ local runtime configuration or recordings enter this build context. Version pins
 and checksums live inside the build; they are not requirements on host packages.
 Keep the image tag/digest with the deployment configuration when upgrading.
 
-## Prepare an isolated deployment
+## Provision the application and browser VM
 
-Use a separate directory outside the checkout for `profile.toml`, SSH credentials,
-models, runtime data and the exported Compose project. Start from a profile for
-an **already prepared VM**. Set its `vm.identity_file` and `vm.known_hosts` to
-files inside this directory, with pinned guest host trust. The export never
-starts, adopts, reformats or provisions a VM.
-
-The following commands assume you are in that deployment directory. `192.0.2.1`
-is a documentation placeholder: replace it with a trusted host bridge IP that
-the VM can reach. The example preserves the same directory path inside the
-helper container so the generated bind mounts also refer to valid host paths.
+Create a deployment directory outside the checkout and run these commands from it.
+The helper keeps the same path inside the container so Compose bind mounts refer
+to real host paths. Export as the ordinary user who will own the data.
 
 ```bash
-docker run --rm --user "$(id -u):$(id -g)" \
-  --workdir "$PWD" --mount "type=bind,source=$PWD,target=$PWD" \
-  live-transcript-app:local --config "$PWD/profile.toml" \
-  deployment "$PWD/stack" --models "$PWD/models" --data "$PWD/data" \
-  --bind 192.0.2.1 --port 8099 --speech-port 9091 --small-speech-port 9093 \
-  --download-models
+docker run --rm --user "$(id -u):$(id -g)" --device /dev/kvm \
+  -e LIVE_TRANSCRIPT_CONFIG= --workdir "$PWD" \
+  --mount "type=bind,source=$PWD,target=$PWD" \
+  live-transcript-app:local deployment "$PWD/stack" --managed-vm \
+  --models "$PWD/models" --data "$PWD/data" --download-models
 
 cd stack
 docker compose -f compose.json build
-docker compose -f compose.json up -d --wait --wait-timeout 300
+docker compose -f compose.json up -d --wait --wait-timeout 2400
 docker compose -f compose.json exec -T app live-transcript --json check
 ```
 
-Alternatively, an installed CLI can run the same `deployment` command directly.
-Without `--download-models`, existing public weights must match their checksums.
-The exporter requires a new empty output directory and never changes the source
-profile. It creates a separate container profile; inspect that profile before
-starting. All selected ports must be unused on the host. Restrict the caption
-listener to the trusted VM network. Speech ports bind to loopback only.
+An installed CLI can export with the same `deployment` command. Without
+`--download-models`, weights must already match their pinned checksums. The output
+directory must be new and empty. All selected host ports must be unused.
+`LIVE_TRANSCRIPT_CONFIG=` clears the application's runtime profile selection for
+this one bootstrap helper; the generated services use their own mounted profile.
 
-The application runs under the exporting user's numeric UID/GID by default,
-with a matching account inside its image for SSH. Keys are mounted read-only;
-they are excluded from the build context. The data volume belongs to that user.
-Rootful Docker is supported without granting the application `privileged`, media
-devices, Docker socket access, or the host's systemd/cgroup sockets. Running the
-application as root is unnecessary. Rootless UID mapping and SELinux volume
-labels require target-specific configuration.
+First boot downloads a verified Ubuntu image, installs Chromium and guest media
+devices, reboots, and tests real audio capture and caption-camera output before
+starting the app. Follow progress with `docker compose -f compose.json logs -f vm`.
+Speech and caption services start independently during VM preparation. Image
+builds and downloads can take several minutes; `up --wait` has a 40-minute budget.
 
-Allow at least 24 GiB RAM for a full CPU backend plus VM and final processing;
-measure actual throughput and adjust the generated CPU/memory limits for the
-machine. Recordings and SQLite state must have enough local disk space. The
-services' memory ceilings are limits, not guaranteed reservations.
+The VM defaults to 4096 MiB RAM, 2 vCPUs and a 64 GiB virtual disk. Change those
+at export with `--vm-memory-mib`, `--vm-vcpus` and `--vm-disk-gib`. The host-forwarded
+SSH port defaults to 22222 (`--vm-ssh-port`). Caption and speech ports default to
+8099, 9091 and 9093. They bind to host loopback. The guest reaches caption ingest
+through a fixed-target relay on the private Compose network.
+
+VM disks, serial/setup logs, identity keys and owner metadata live in `data-vm`,
+next to `data`; `--vm-data` chooses another location. Keep it separate from app
+storage and the deployment/build directory. The app receives only a read-only
+operator key and pinned SSH trust. It cannot access the raw VM disk, administrative
+key or QMP control socket. Only the VM sidecar receives `/dev/kvm`; neither it nor
+the app runs privileged or mounts the Docker socket. Both run under the exporting
+user's UID/GID. `--kvm-gid` can explicitly select the device's host group.
+
+Retained VM disks and credentials are reused, never recreated on restart. A lock
+prevents two runners from opening the same guest. Export refuses to adopt an
+unowned directory or silently change retained VM resource/identity settings.
+Back up both `data` and `data-vm`; deleting either bind mount is not an upgrade.
+Guest originals remain inside the disk until a separate retention decision.
+
+If first boot fails, inspect `data-vm/serial.log`, `qemu.log` and `bootstrap.log`.
+An explicit retry is available only for a failed, never-initialized guest:
+
+```bash
+docker compose -f compose.json exec -T vm \
+  python3 -m live_transcript.runtime.qemu --retry-setup
+docker compose -f compose.json up -d --wait --wait-timeout 2400
+```
+
+Retry holds the guest meeting lease and refuses an initialized VM. It does not
+replace the disk. A timeout while packages are still installing is not a reason
+to reboot: inspect progress and repeat `up --wait` first.
+
+## Use an already prepared VM
+
+Without `--managed-vm`, export connects to a prepared VM and never starts or
+provisions it. Select its private profile with pinned `vm.identity_file` and
+`vm.known_hosts`; `vm.port` defaults to 22. Mount the profile and credentials in
+the bootstrap directory and supply `--config "$PWD/profile.toml"` to the helper.
+Omit `--device /dev/kvm` and add `--bind HOST_BRIDGE_IP` so that guest can reach
+caption ingest. Use a trusted bridge address, not an unrestricted listener.
+
+The same app/backend images run in both modes. Host networking lets the app reach
+the existing VM bridge and its dynamically allocated console ports. Speech
+workers and a managed VM use a private Compose network. The application uses a
+local data volume shared with caption ingest for journals and final processing.
+The optional notes endpoint must be reachable from both the app host network
+and caption container; their loopback/DNS contexts differ.
 
 ## Operate it
 
@@ -127,7 +162,12 @@ backups and control can coexist. Only named application tasks can be queued.
 App health means its scheduler is running. Caption protocol health, ASR model
 readiness, guest admission and source recording progress remain separate checks.
 Docker restart policy handles process exits; health checks alone do not restart
-an unhealthy process. Never restart or stop the VM as a response to a caption,
+an unhealthy process. Restarting `app` leaves the VM running. A deliberate `stop vm`
+or `down` requests guest ACPI shutdown and allows up to 120 seconds for guest
+services to finish before terminating QEMU. Stop the meeting and verify retrieval
+before intentionally stopping the whole stack. After a guest reboot, `start`
+prepares its audio topology under the idle lease before launching the browser;
+a read-only preflight can report that sink as unavailable until preparation. Never restart or stop the VM as a response to a caption,
 summary, application, or UI failure.
 
 ## Hermes
@@ -140,11 +180,7 @@ container state as if its PIDs belonged to the host namespace. The built-in
 watchdog queues alerts but does not send messages or acknowledge delivery; Hermes
 reads `notifications` and acknowledges only after successful authorized delivery.
 
-## VM prerequisite
-
-The Docker deployment connects to an already prepared browser VM. Use the native
-`setup` command to provision one if needed. The application container does not
-start, replace or provision the VM.
+## Optional assets
 
 The standard image uses CPU speech and does not bundle optional Piper voices,
 speaker-diarization models or GPU drivers. Supply those assets and runtime

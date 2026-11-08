@@ -615,7 +615,75 @@ def open_console(args, emit):
     return dict(console_closed=True, meeting_stopped=False)
 
 
+def stream_audio(request):
+    """Listen to this exact desktop; never retarget an existing stream."""
+    from live_transcript.core.config import get
+
+    if subprocess.run(["systemd-detect-virt", "--vm", "--quiet"], timeout=5).returncode:
+        raise RuntimeError("Audio playback must originate inside the configured VM")
+    target = request.get("target")
+    if target not in displays():
+        raise ValueError("The target desktop has changed")
+    env = dict(os.environ, PULSE_SERVER=f"unix:/run/user/{os.getuid()}/pulse/native")
+    sink = get("audio", "sink")
+    # ffmpeg sees only the meeting sink monitor. This never changes capture,
+    # routes a microphone or stores another copy of the original audio.
+    process = subprocess.Popen(
+        [
+            "ffmpeg",
+            "-nostdin",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "pulse",
+            "-i",
+            sink + ".monitor",
+            "-ac",
+            "1",
+            "-ar",
+            "48000",
+            "-c:a",
+            "libopus",
+            "-b:a",
+            "64000",
+            "-f",
+            "ogg",
+            "-page_duration",
+            "20000",
+            "-flush_packets",
+            "1",
+            "pipe:1",
+        ],
+        stdin=subprocess.DEVNULL,
+        stdout=sys.stdout.buffer,
+        stderr=sys.stderr,
+        env=env,
+        start_new_session=True,
+    )
+    stopped = False
+
+    def stop(*_):
+        nonlocal stopped
+        stopped = True
+
+    for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
+        signal.signal(sig, stop)
+    deadline = time.monotonic() + get("console", "session_seconds")
+    try:
+        while not stopped and process.poll() is None and time.monotonic() < deadline:
+            if target not in displays():
+                break
+            time.sleep(1)
+    finally:
+        stop_process(process)
+
+
 def main():
+    if sys.argv[1:] == ["--audio"]:
+        request = json.loads(sys.stdin.buffer.read(8193))
+        stream_audio(request)
+        return
     if sys.argv[1:2] == ["--desktop"]:
         parser = argparse.ArgumentParser()
         parser.add_argument("--desktop", required=True)

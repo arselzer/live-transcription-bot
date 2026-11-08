@@ -20,6 +20,7 @@ exec 9>"$LT_LOGS/run.lock"
 flock -w "${LT_WAIT_FOR_LOCK:-0}" 9 || { echo "Live Transcript is already running" >&2; exit 3; }
 case "$MEET" in *"'"*) echo "meeting URL may not contain a single quote"; exit 1;; esac
 SSHK=(-o BatchMode=yes -o ConnectTimeout=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=8)
+if [ "$LT_SSH_PORT" != 22 ]; then SSHK+=(-o "Port=$LT_SSH_PORT"); fi
 LT_RUN_ID="$(date -u +%Y%m%d%H%M%S)-$("$PYTHON" -c 'import uuid; print(uuid.uuid4().hex)')"
 export LT_RUN_ID
 

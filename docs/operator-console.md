@@ -133,3 +133,17 @@ The helper uses pinned npm dependencies in a temporary build directory, leaving
 node_modules outside the source tree. Commit the source, lockfile, generated
 assets, and retained Vue license together. Run the documented source/privacy and
 package checks after rebuilding.
+
+## Listen to meeting audio
+
+The **Listen** control plays Ogg Opus audio from the selected VM's configured
+meeting sink. It requires the same authenticated session as the transcript and
+console. Browser playback starts only after your click. Native audio controls
+adjust playback volume; your computer's microphone is not forwarded.
+
+Playback stops on VM selection, reconnect, logout/session expiration or desktop
+replacement. A broken stream can be restarted with Listen. At most two listeners
+per VM console can connect at once. Closing the page or stopping playback affects
+only its own FFmpeg/SSH stream, never the source recorder. The console hub forwards
+this stream without buffering an entire recording. Your browser must support Ogg
+Opus; playback delay depends on its buffering and network connection.

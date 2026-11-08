@@ -171,3 +171,6 @@ src/live_transcript/runtime/application.py
 src/live_transcript/runtime/application.Dockerfile
 tests/test_application_runtime.py
 docs/application-deployment.md
+src/live_transcript/runtime/qemu.py
+src/live_transcript/runtime/vm.Dockerfile
+tests/test_qemu.py

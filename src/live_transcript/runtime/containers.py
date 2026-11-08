@@ -21,7 +21,9 @@ def application_options(parser):
     parser.add_argument("--models", required=True)
     parser.add_argument("--data", required=True, help="persistent local application data directory")
     parser.add_argument(
-        "--bind", required=True, help="trusted host bridge IPv4 reachable from the VM"
+        "--bind",
+        default="127.0.0.1",
+        help="caption host IPv4; prepared VMs need a reachable bridge IP",
     )
     parser.add_argument("--port", type=int, default=8099, help="caption TCP port")
     parser.add_argument(
@@ -34,6 +36,15 @@ def application_options(parser):
         "--model-url", default="", help="notes endpoint reachable from the containers"
     )
     parser.add_argument("--model-name", default="local-model")
+    parser.add_argument(
+        "--managed-vm", action="store_true", help="provision an isolated KVM guest with Compose"
+    )
+    parser.add_argument("--vm-data", default="", help="private VM storage outside application data")
+    parser.add_argument("--vm-memory-mib", type=int, default=4096)
+    parser.add_argument("--vm-vcpus", type=int, default=2)
+    parser.add_argument("--vm-disk-gib", type=int, default=64)
+    parser.add_argument("--vm-ssh-port", type=int, default=22222)
+    parser.add_argument("--kvm-gid", type=int, help="numeric host group owning /dev/kvm")
 
 
 def export_application(args):
@@ -41,18 +52,69 @@ def export_application(args):
     from live_transcript.runtime.deployment import build_application_wheel
 
     vm = dict(CONFIG["vm"])
-    if not vm["ssh"] or not vm["identity_file"] or not vm["known_hosts"]:
+    if not args.managed_vm and (not vm["ssh"] or not vm["identity_file"] or not vm["known_hosts"]):
         raise ValueError(
             "Select a prepared VM profile with pinned SSH identity_file and known_hosts"
         )
     # Config port checks happen before weight downloads or writing deployment data.
     ports = [args.port, args.speech_port, args.small_speech_port]
-    if len(set(ports)) != 3 or any(type(p) is not int or not 1 <= p <= 65535 for p in ports):
+    if args.managed_vm:
+        ports.append(args.vm_ssh_port)
+    if len(set(ports)) != len(ports) or any(
+        type(p) is not int or not 1 <= p <= 65535 for p in ports
+    ):
         raise ValueError("Caption and speech ports must be valid and distinct")
     data = Path(args.data).expanduser().absolute()
     directory = Path(args.directory).expanduser().absolute()
     if directory.exists() and any(directory.iterdir()):
         raise ValueError("Export requires an empty directory")
+    vm_spec = None
+    vm_data = None
+    if args.managed_vm:
+        from live_transcript.runtime.qemu import prepare
+
+        if args.bind != "127.0.0.1":
+            raise ValueError("Managed VM caption listener must bind 127.0.0.1")
+        if args.port == 2222:
+            raise ValueError("Caption port conflicts with internal VM SSH port 2222")
+        vm_data = (
+            Path(args.vm_data).expanduser().absolute()
+            if args.vm_data
+            else data.with_name(data.name + "-vm")
+        )
+        # Neither app data nor the build context may contain the VM disk/admin key.
+        paths = (vm_data.resolve(), data.resolve(), directory.resolve())
+        if any(
+            a == b or a in b.parents or b in a.parents
+            for a, b in ((paths[0], paths[1]), (paths[0], paths[2]))
+        ):
+            raise ValueError(
+                "VM storage must be separate from application data and deployment files"
+            )
+        if args.kvm_gid is None:
+            args.kvm_gid = Path("/dev/kvm").stat().st_gid
+        if type(args.kvm_gid) is not int or not 0 <= args.kvm_gid <= 2147483647:
+            raise ValueError("Invalid KVM group id")
+        vm_spec = prepare(
+            vm_data,
+            memory_mib=args.vm_memory_mib,
+            vcpus=args.vm_vcpus,
+            disk_gib=args.vm_disk_gib,
+            ssh_port=args.vm_ssh_port,
+            caption_port=args.port,
+        )
+        vm.update(
+            ssh="transcript@127.0.0.1",
+            port=args.vm_ssh_port,
+            ip="127.0.0.1",
+            name="live-transcript-" + vm_spec["id"],
+            home="/home/transcript",
+            python="/opt/live-transcript/venv/bin/python",
+            identity_file=str(vm_data / "credentials/operator"),
+            known_hosts=str(vm_data / "credentials/known_hosts"),
+        )
+    elif args.vm_data or args.kvm_gid is not None:
+        raise ValueError("VM storage/group options require --managed-vm")
     # All credentials stay outside the Docker build context. Never modify keys.
     credentials = []
     for key in ("identity_file", "known_hosts"):
@@ -134,7 +196,10 @@ def export_application(args):
         "runtime": dict(supervisor="app", watchdog_seconds=30, calendar_seconds=0, max_jobs=8),
         "services": dict(captions="", primary="", cpu_large="", cpu_small=""),
         "caption": dict(
-            host=args.bind, port=args.port, stt_url=f"http://127.0.0.1:{args.speech_port}/inference"
+            host=args.bind,
+            guest_host="live-transcript-host" if vm_spec else "",
+            port=args.port,
+            stt_url=f"http://127.0.0.1:{args.speech_port}/inference",
         ),
         "asr": dict(
             primary_device="cpu",
@@ -185,11 +250,68 @@ USER 10001:10001
     )
     atomic_text(
         directory / ".dockerignore",
-        "*\n!*.whl\n!backend.pyz\n!application.Dockerfile\n!backend.Dockerfile\n!whisper.Dockerfile\n",
+        "*\n!*.whl\n!backend.pyz\n!application.Dockerfile\n!backend.Dockerfile\n!whisper.Dockerfile\n!vm.Dockerfile\n",
     )
+    if vm_spec:
+        from live_transcript.core.config import write_vm_config
+
+        write_vm_config(directory / "vm-guest.toml")
+        add_managed_vm(compose, directory, vm_data, vm_spec, args.kvm_gid)
     atomic_json(directory / "compose.json", compose)
-    result.update(application=True, profile=str(profile), vm_managed=False)
+    result.update(application=True, profile=str(profile), vm_managed=bool(vm_spec))
+    if vm_data:
+        result["vm_data"] = str(vm_data)
     return result
+
+
+def add_managed_vm(compose, directory, storage, spec, kvm_gid):
+    """A private sidecar gets KVM and disk; the controller gets only operator SSH."""
+    ident = compose["name"].removeprefix("live-transcript-")
+    atomic_json(directory / "vm.json", spec)
+    atomic_text(
+        directory / "vm.Dockerfile",
+        files("live_transcript.runtime").joinpath("vm.Dockerfile").read_text(),
+    )
+    compose["services"]["vm"] = dict(
+        image="live-transcript-vm:" + ident,
+        pull_policy="never",
+        build=dict(
+            context=".",
+            dockerfile="vm.Dockerfile",
+            args=dict(APP_UID=str(os.getuid()), APP_GID=str(os.getgid())),
+        ),
+        user=f"{os.getuid()}:{os.getgid()}",
+        group_add=[str(kvm_gid)],
+        devices=["/dev/kvm:/dev/kvm"],
+        ports=[f"127.0.0.1:{spec['ssh_port']}:2222"],
+        volumes=[
+            dict(type="bind", source=str(storage).replace("$", "$$"), target="/vm"),
+            dict(type="bind", source="./vm.json", target="/config/vm.json", read_only=True),
+            dict(
+                type="bind", source="./vm-guest.toml", target="/config/guest.toml", read_only=True
+            ),
+        ],
+        read_only=True,
+        tmpfs=["/tmp:size=256m,mode=1777"],
+        cap_drop=["ALL"],
+        security_opt=["no-new-privileges:true"],
+        init=True,
+        restart="unless-stopped",
+        stop_grace_period="150s",
+        pids_limit=256,
+        mem_limit=str(spec["memory_mib"] + 1024) + "m",
+        cpus=spec["vcpus"],
+        healthcheck=dict(
+            test=["CMD", "python3", "-m", "live_transcript.runtime.qemu", "--health"],
+            interval="10s",
+            timeout="4s",
+            retries=6,
+            start_period="1800s",
+        ),
+        labels={"io.live-transcript.installation": ident},
+    )
+    # Startup ordering only: never propagate controller/ASR restarts to the VM.
+    compose["services"]["app"]["depends_on"] = {"vm": {"condition": "service_healthy"}}
 
 
 def export_options(parser):

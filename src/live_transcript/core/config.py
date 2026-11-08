@@ -46,6 +46,7 @@ DEFAULTS = {
     },
     "vm": {
         "ssh": "",
+        "port": 22,
         "name": "transcript",
         "home": "/home/transcript",
         "ip": "",
@@ -80,6 +81,7 @@ DEFAULTS = {
     "console": {"login_mode": "isolated", "shared_login_file": "", "session_seconds": 7200},
     "caption": {
         "host": "127.0.0.1",
+        "guest_host": "",
         "bind": "127.0.0.1",
         "port": 8099,
         "stt_url": "http://127.0.0.1:9091/inference",
@@ -195,6 +197,8 @@ def load(path=None):
     if console["login_mode"] == "shared" and not console["shared_login_file"]:
         raise ValueError("console.shared_login_file is required for shared login")
     vm = config["vm"]
+    if type(vm["port"]) is not int or not 1 <= vm["port"] <= 65535:
+        raise ValueError("vm.port must be between 1 and 65535")
     runtime = config["runtime"]
     if runtime["supervisor"] not in ("systemd", "app"):
         raise ValueError("runtime.supervisor must be systemd or app")
@@ -330,6 +334,8 @@ def get(section, key):
 def ssh_options():
     """Use installation-scoped credentials consistently for control and copies."""
     options = ["-o", "BatchMode=yes"]
+    if get("vm", "port") != 22:
+        options += ["-o", "Port=" + str(get("vm", "port"))]
     if get("vm", "identity_file"):
         options += ["-i", get("vm", "identity_file"), "-o", "IdentitiesOnly=yes"]
     if get("vm", "known_hosts"):
@@ -370,6 +376,7 @@ def shell_values():
         "LT_VM_PYTHON": get("vm", "python"),
         "LT_SSH_IDENTITY": get("vm", "identity_file"),
         "LT_SSH_KNOWN_HOSTS": get("vm", "known_hosts"),
+        "LT_SSH_PORT": str(get("vm", "port")),
         "LT_CAPTION_UNIT": get("services", "captions"),
         "LT_CAPTION_HOST": get("caption", "host"),
         "LT_CAPTION_PORT": str(get("caption", "port")),
@@ -386,7 +393,9 @@ def write_vm_config(destination):
     """Deploy only guest-relevant settings; host paths and calendar remain private."""
     home = get("vm", "home")
     sections = {
-        "caption": CONFIG["caption"],
+        "caption": dict(
+            CONFIG["caption"], host=get("caption", "guest_host") or get("caption", "host")
+        ),
         "audio": CONFIG["audio"],
         "browser": CONFIG["browser"],
         "google": CONFIG["google"],

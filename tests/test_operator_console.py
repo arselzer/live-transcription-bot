@@ -5,6 +5,8 @@ import http.cookiejar
 import json
 import os
 import socket
+import subprocess
+import sys
 from pathlib import Path
 import tempfile
 import threading
@@ -62,11 +64,65 @@ class ConsoleHTTPTests(unittest.TestCase):
             "/api/status",
             "/api/events",
             "/api/meeting",
+            "/api/audio",
             "/novnc/vnc.html",
             "/novnc/websockify",
         ):
             self.assertEqual(self.request("GET", path)[0], 401)
         self.bridge.call.assert_not_called()
+
+    def test_audio_playback_is_authenticated_bounded_and_reports_startup_failure(self):
+        cookie = self.login()
+        self.server.audio_slots.acquire()
+        self.server.audio_slots.acquire()
+        try:
+            self.assertEqual(self.request("GET", "/api/audio", cookie=cookie)[0], 429)
+            self.bridge.open_audio.assert_not_called()
+        finally:
+            self.server.audio_slots.release()
+            self.server.audio_slots.release()
+        process = subprocess.Popen(
+            [sys.executable, "-c", "print('not audio')"],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.bridge.open_audio.return_value = process
+        code, _, body = self.request("GET", "/api/audio", cookie=cookie)
+        self.assertEqual(code, 503)
+        self.assertIn(b"recording is independent", body)
+        process.wait(timeout=5)
+        self.assertIsNotNone(process.poll())
+        self.bridge.call.assert_not_called()
+
+    def test_audio_stream_returns_headers_before_eof_and_cleans_up_on_disconnect(self):
+        cookie = self.login()
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-u",
+                "-c",
+                "import sys,time; sys.stdout.buffer.write(b'Og'); sys.stdout.flush(); time.sleep(.1); sys.stdout.buffer.write(b'gS'+b'x'*65532); sys.stdout.flush(); time.sleep(30)",
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.bridge.open_audio.return_value = process
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        try:
+            conn.request(
+                "GET", "/api/audio", headers={"Host": self.server.authority, "Cookie": cookie}
+            )
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.getheader("Content-Type"), "audio/ogg")
+            self.assertEqual(response.read(4), b"OggS")
+            self.assertIsNone(process.poll())
+        finally:
+            response.close()
+            conn.close()
+            self.server.monitor_stop.set()
+            process.wait(timeout=5)
+        self.assertIsNotNone(process.poll())
 
     def test_meeting_journal_failures_do_not_break_vm_status(self):
         cookie = self.login()
@@ -693,6 +749,41 @@ class ConsoleHubTests(unittest.TestCase):
             code, _, body = self.request("GET", f"/vm/{ident}/api/status", cookie=cookie)
             self.assertEqual(code, 200)
             self.assertEqual(json.loads(body)["display"], f":{70 + index}")
+
+    def test_hub_streams_selected_audio_without_waiting_for_the_complete_response(self):
+        cookie = self.login()
+        process = subprocess.Popen(
+            [
+                sys.executable,
+                "-u",
+                "-c",
+                "import sys,time; sys.stdout.buffer.write(b'OggS'+b'x'*(6*1024*1024)); sys.stdout.flush(); time.sleep(30)",
+            ],
+            stdout=subprocess.PIPE,
+            start_new_session=True,
+        )
+        self.bridges[1].open_audio.return_value = process
+        conn = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=3)
+        response = None
+        try:
+            conn.request(
+                "GET",
+                "/vm/second/api/audio",
+                headers={"Host": self.server.authority, "Cookie": cookie},
+            )
+            response = conn.getresponse()
+            self.assertEqual(response.status, 200)
+            self.assertEqual(response.read(4), b"OggS")
+            self.bridges[0].open_audio.assert_not_called()
+        finally:
+            if response:
+                response.close()
+            conn.close()
+            for server in [self.server, *self.backends]:
+                server.monitor_stop.set()
+            if process.poll() is None:
+                process.terminate()
+            process.wait(timeout=5)
 
     def test_hub_routes_meeting_text_to_only_the_selected_backend(self):
         cookie = self.login()

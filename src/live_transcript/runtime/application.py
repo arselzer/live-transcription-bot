@@ -47,6 +47,8 @@ def identity():
         get("paths", "root"),
         trust_hash,
     ]
+    if get("vm", "port") != 22:
+        values += ["ssh-port", get("vm", "port")]
     return hashlib.sha256(json.dumps(values).encode()).hexdigest()
 
 

@@ -19,6 +19,7 @@ safety_copies = "~/.local/share/live-transcript/safety-copies"
 # postprocess_python = "/path/to/installed/venv/bin/python"
 
 [vm]
+port = 22
 ssh = "transcript@192.0.2.20"
 ip = "192.0.2.20"
 name = "transcript"
@@ -64,6 +65,8 @@ google_private = true
 # google_executable = "/path/to/google-chrome"
 
 [caption]
+# Optional guest-facing hostname when it differs from the controller address.
+guest_host = ""
 host = "192.0.2.1" # Host IP reachable from the VM; bind only on a trusted interface.
 bind = "192.0.2.1"
 port = 8099

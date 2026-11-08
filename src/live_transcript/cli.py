@@ -331,7 +331,7 @@ def main(argv=None):
     )
     application_options(
         commands.add_parser(
-            "deployment", help="export the complete container application for a prepared browser VM"
+            "deployment", help="export the container application with an isolated browser VM"
         )
     )
     for name in ("check", "status", "config", "info"):

@@ -1,6 +1,36 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import MeetingTranscript from "./MeetingTranscript.vue";
+const audio = ref(null), listening = ref(false), audioError = ref("");
+let audioAttempt = 0;
+function stopListening() {
+  audioAttempt++;
+  listening.value = false;
+  if (audio.value) {
+    audio.value.pause();
+    audio.value.removeAttribute("src");
+    audio.value.load();
+  }
+}
+async function listen() {
+  if (listening.value) { stopListening(); return; }
+  const attempt = ++audioAttempt;
+  audioError.value = "";
+  listening.value = true;
+  audio.value.src = apiBase.value + "/api/audio";
+  try { await audio.value.play(); }
+  catch (_) {
+    if (attempt === audioAttempt) {
+      stopListening();
+      audioError.value = "Audio playback is unavailable. Recording is independent.";
+    }
+  }
+}
+function audioFailed() {
+  if (!listening.value) return;
+  stopListening();
+  audioError.value = "Audio playback stopped. You can try listening again.";
+}
 const tab = ref("transcript"),
   meeting = ref(null),
   meetingError = ref(""),
@@ -295,6 +325,8 @@ async function selectConsole(id) {
   await reconnect();
 }
 async function reconnect() {
+  stopListening();
+  audioError.value = "";
   const base = apiBase.value;
   const attempt = ++connectionAttempt;
   error.value = "";
@@ -391,6 +423,7 @@ onMounted(async () => {
   timer = setInterval(refresh, 4000);
 });
 onUnmounted(() => {
+  stopListening();
   viewerObserver?.disconnect();
   clearInterval(timer);
   clearInterval(clockTimer);
@@ -528,6 +561,20 @@ onUnmounted(() => {
         </div>
       </section>
       <aside>
+        <section class="panel audio-panel">
+          <div class="panel-title">
+            <h2>Meeting audio</h2>
+            <button :disabled="!authenticated || !vmReady" @click="listen">
+              {{ listening ? "Stop listening" : "Listen" }}
+            </button>
+          </div>
+          <p class="micro">Listen to the selected VM. Your microphone stays off.</p>
+          <audio ref="audio" v-show="listening" controls preload="none"
+            controlslist="nodownload noplaybackrate" aria-label="Meeting audio playback"
+            @error="audioFailed" @ended="stopListening"
+            @pause="listening && stopListening()" />
+          <p v-if="audioError" role="status" class="micro warning">{{ audioError }}</p>
+        </section>
         <section v-show="tab === 'console'" class="panel paste-panel">
           <div class="panel-title">
             <h2>Paste into the VM</h2>

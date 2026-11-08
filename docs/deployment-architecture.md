@@ -9,9 +9,15 @@ Two application deployments are supported:
 - **Native:** `setup` provisions a managed VM and host tools/services. Host
   background jobs use systemd user services.
 - **Docker:** the application image packages the CLI, UI/API, media tools,
-  retrieval and final processing for a prepared VM. An application supervisor
+  retrieval and final processing. Compose can provision a QEMU/KVM guest, or
+  connect to a prepared VM. An application supervisor
   owns durable jobs; caption ingest and live speech have separate containers.
   See [application deployment](application-deployment.md).
+
+A managed VM sidecar has a private Compose network, a persistent guest disk and
+`/dev/kvm`. It does not require a host libvirt daemon or privileged container.
+The app connects over pinned loopback-forwarded SSH and never receives the disk,
+admin key or QMP socket. Guest caption traffic crosses a fixed-target relay.
 
 ## Ownership and failure boundaries
 

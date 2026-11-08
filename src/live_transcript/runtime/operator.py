@@ -263,6 +263,10 @@ class GuestBridge:
             get("vm", "ssh"),
             shlex.join([get("vm", "python"), "-u", bundle, "console", "--action"]),
         ]
+        self.audio_command = [
+            *self.command[:-1],
+            shlex.join([get("vm", "python"), "-u", bundle, "console", "--audio"]),
+        ]
         self.lock = threading.Lock()
         self.target = None
         self.diagnostics = Path(get("paths", "logs")) / "console-actions.log"
@@ -290,6 +294,28 @@ class GuestBridge:
                 raise RuntimeError(value["error"])
             return value
 
+    def open_audio(self):
+        self.diagnostics.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        fd = os.open(self.diagnostics, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "ab") as log:
+            os.fchmod(log.fileno(), 0o600)
+            process = subprocess.Popen(
+                self.audio_command,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=log,
+                start_new_session=True,
+            )
+        try:
+            process.stdin.write(json.dumps(dict(target=self.target)).encode())
+            process.stdin.close()
+            return process
+        except Exception:
+            from live_transcript.runtime.console import stop_process
+
+            stop_process(process)
+            raise
+
 
 class OperatorServer(ThreadingHTTPServer):
     daemon_threads = True
@@ -315,6 +341,7 @@ class OperatorServer(ThreadingHTTPServer):
         self.last_admission_state = None
         self.last_speech_error = False
         self.last_interaction = 0
+        self.audio_slots = threading.BoundedSemaphore(2)
         self.monitor_stop = threading.Event()
         super().__init__(address, Handler)
         self.authority = f"{advertised_host}:{self.server_port}"
@@ -569,6 +596,8 @@ class Handler(BaseHTTPRequestHandler):
             )
         if not self.authenticated():
             return self.reply(401, dict(error="Console session expired; reopen its link"))
+        if path == "/api/audio":
+            return self.audio()
         if path == "/api/consoles":
             return self.reply(
                 200,
@@ -603,6 +632,76 @@ class Handler(BaseHTTPRequestHandler):
                 return self.proxy_websocket()
             return self.proxy_asset(path)
         self.reply(404, dict(error="Not found"))
+
+    def audio(self):
+        from live_transcript.runtime.console import stop_process
+
+        if not self.server.audio_slots.acquire(blocking=False):
+            return self.reply(429, dict(error="Two listeners are already connected"))
+        process = None
+        headers_sent = False
+        try:
+            process = self.server.bridge.open_audio()
+            first = b""
+            deadline = time.monotonic() + 12
+            while len(first) < 4 and time.monotonic() < deadline:
+                ready, _, _ = select.select(
+                    [process.stdout], [], [], max(0, deadline - time.monotonic())
+                )
+                if not ready:
+                    break
+                block = os.read(process.stdout.fileno(), 16384)
+                if not block:
+                    break
+                first += block
+            if not first.startswith(b"OggS"):
+                raise RuntimeError("Meeting audio is unavailable")
+            self.close_connection = True
+            self.send_response(200)
+            self.headers_safe()
+            self.send_header("Content-Type", "audio/ogg")
+            self.send_header("Transfer-Encoding", "chunked")
+            self.end_headers()
+            headers_sent = True
+            self.server.events.add("audio_listener_started", "Meeting audio playback started")
+            self.write_chunk(first)
+            deadline = time.monotonic() + self.server.auth.session_seconds
+            last_audio = time.monotonic()
+            while (
+                not self.server.monitor_stop.is_set()
+                and time.monotonic() < deadline
+                and self.authenticated()
+                and time.monotonic() - last_audio < 15
+            ):
+                ready, _, _ = select.select([process.stdout], [], [], 1)
+                if ready:
+                    block = os.read(process.stdout.fileno(), 16384)
+                    if not block:
+                        break
+                    self.write_chunk(block)
+                    last_audio = time.monotonic()
+            self.wfile.write(b"0\r\n\r\n")
+            self.wfile.flush()
+        except (RuntimeError, ValueError, OSError, subprocess.SubprocessError):
+            if not headers_sent:
+                self.reply(
+                    503, dict(error="Meeting audio is unavailable; recording is independent")
+                )
+        finally:
+            try:
+                if process:
+                    try:
+                        stop_process(process)
+                    finally:
+                        process.stdout.close()
+            finally:
+                self.server.audio_slots.release()
+            if headers_sent:
+                self.server.events.add("audio_listener_stopped", "Meeting audio playback stopped")
+
+    def write_chunk(self, block):
+        self.wfile.write(f"{len(block):x}\r\n".encode() + block + b"\r\n")
+        self.wfile.flush()
 
     def proxy_asset(self, path):
         import http.client
@@ -720,7 +819,7 @@ class HubHandler(Handler):
     def do_GET(self):
         if self.path.startswith("/vm/"):
             return self.forward("GET")
-        if urlsplit(self.path).path in ("/api/status", "/api/events", "/api/meeting"):
+        if urlsplit(self.path).path in ("/api/status", "/api/events", "/api/meeting", "/api/audio"):
             return self.reply(404, dict(error="Select a VM first"))
         super().do_GET()
 
@@ -744,7 +843,7 @@ class HubHandler(Handler):
         port, path = target
         socket_request = self.headers.get("Upgrade", "").lower() == "websocket"
         allowed = (
-            path in ("/api/session", "/api/status", "/api/events", "/api/meeting")
+            path in ("/api/session", "/api/status", "/api/events", "/api/meeting", "/api/audio")
             or path.startswith("/novnc/")
             if method == "GET"
             else path in ("/api/action", "/api/interaction")
@@ -772,6 +871,24 @@ class HubHandler(Handler):
         try:
             conn.request(method, path, payload, headers)
             response = conn.getresponse()
+            if path == "/api/audio" and response.status == 200:
+                self.close_connection = True
+                self.send_response(200)
+                self.headers_safe()
+                self.send_header("Content-Type", "audio/ogg")
+                self.send_header("Transfer-Encoding", "chunked")
+                self.end_headers()
+                try:
+                    while not self.server.monitor_stop.is_set() and self.authenticated():
+                        block = response.read1(16384)
+                        if not block:
+                            break
+                        self.write_chunk(block)
+                    self.wfile.write(b"0\r\n\r\n")
+                    self.wfile.flush()
+                except (OSError, http.client.HTTPException):
+                    pass
+                return
             body = response.read(4 * 1024 * 1024 + 1)
             if len(body) > 4 * 1024 * 1024:
                 raise ValueError("Oversized console response")
