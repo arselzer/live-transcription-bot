@@ -12,6 +12,70 @@ from live_transcript.runtime.containers import export_options, export_backend, b
 
 
 class BackendExportTests(unittest.TestCase):
+    def test_complete_application_export_keeps_vm_credentials_outside_the_image(self):
+        import copy
+        from live_transcript.core import config
+        from live_transcript.runtime.containers import application_options, export_application
+        from live_transcript.runtime.installation import MODELS
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            models = root / "models"
+            models.mkdir()
+            for _, _, name, _ in MODELS.values():
+                (models / name).write_text("fixture weights")
+            key, known = root / "identity", root / "known_hosts"
+            key.write_text("fixture private key never enters the image")
+            known.write_text("fixture host trust")
+            values = copy.deepcopy(config.DEFAULTS)
+            values["vm"].update(
+                ssh="transcript@192.0.2.20", identity_file=str(key), known_hosts=str(known)
+            )
+            parser = argparse.ArgumentParser()
+            application_options(parser)
+            args = parser.parse_args(
+                [
+                    str(root / "bundle"),
+                    "--models",
+                    str(models),
+                    "--data",
+                    str(root / "data"),
+                    "--bind",
+                    "192.0.2.1",
+                ]
+            )
+            checksums = {name: checksum for _, _, name, checksum in MODELS.values()}
+            with (
+                patch.object(config, "CONFIG", values),
+                patch(
+                    "live_transcript.runtime.provision.sha256",
+                    side_effect=lambda p: checksums[p.name],
+                ),
+            ):
+                result = export_application(args)
+            self.assertTrue(result["application"])
+            self.assertFalse(result["vm_managed"])
+            compose = json.loads((root / "bundle/compose.json").read_text())
+            application = compose["services"]["app"]
+            self.assertEqual(application["build"]["target"], "wheel")
+            self.assertNotIn("privileged", application)
+            self.assertNotIn("devices", application)
+            self.assertTrue(
+                any(
+                    v["target"] == "/credentials/identity_file" and v["read_only"]
+                    for v in application["volumes"]
+                )
+            )
+            ignore = (root / "bundle/.dockerignore").read_text()
+            self.assertNotIn("!application.toml", ignore)
+            with zipfile.ZipFile(next((root / "bundle").glob("*.whl"))) as wheel:
+                contents = b"".join(wheel.read(n) for n in wheel.namelist())
+                self.assertNotIn(key.read_bytes(), contents)
+                self.assertIn("live_transcript/runtime/launch.sh", wheel.namelist())
+            generated = config.load(root / "bundle/application.toml")
+            self.assertEqual(generated["runtime"]["supervisor"], "app")
+            self.assertFalse(generated["vm"]["manage_libvirt"])
+
     def test_native_and_container_decoder_cannot_claim_the_same_journal(self):
         from live_transcript.transcription.store import journal_owner
 

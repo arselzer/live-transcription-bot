@@ -20,7 +20,7 @@ exec 9>"$LT_LOGS/run.lock"
 flock -w "${LT_WAIT_FOR_LOCK:-0}" 9 || { echo "Live Transcript is already running" >&2; exit 3; }
 case "$MEET" in *"'"*) echo "meeting URL may not contain a single quote"; exit 1;; esac
 SSHK=(-o BatchMode=yes -o ConnectTimeout=6 -o ServerAliveInterval=15 -o ServerAliveCountMax=8)
-LT_RUN_ID="$(date -u +%Y%m%d%H%M%S)-$$"
+LT_RUN_ID="$(date -u +%Y%m%d%H%M%S)-$("$PYTHON" -c 'import uuid; print(uuid.uuid4().hex)')"
 export LT_RUN_ID
 
 [ -z "$LT_SSH_IDENTITY" ] || SSHK+=(-i "$LT_SSH_IDENTITY" -o IdentitiesOnly=yes)
@@ -106,14 +106,19 @@ print("cd " + shlex.quote(home) + " && export LIVE_TRANSCRIPT_CONFIG=" + shlex.q
       shlex.join([os.environ.get('LT_VM_PYTHON', 'python3'), '-u', home + '/live-transcript.pyz', 'session'] + sys.argv[1:]))
 PY
 )
-systemd-run --user --quiet --collect --setenv="LIVE_TRANSCRIPT_CONFIG=$LIVE_TRANSCRIPT_CONFIG" --unit="live-transcript-mirror-$$" \
+if [ "$LT_SUPERVISOR" = app ]; then
+  "$PYTHON" -m live_transcript.worker app --key "mirror-$LT_RUN_ID" --submit mirror -- --vm "$LT_VM" --join-log "$JLOG"
+  "$PYTHON" -m live_transcript.worker app --key "local-copy-$LT_RUN_ID" --submit mirror -- --vm "$LT_VM" --join-log "$JLOG" --lane local
+else
+systemd-run --user --quiet --collect --setenv="LIVE_TRANSCRIPT_CONFIG=$LIVE_TRANSCRIPT_CONFIG" --unit="live-transcript-mirror-$LT_RUN_ID" \
   --property=Restart=on-failure --property=RestartSec=5s \
   "$PYTHON" -m live_transcript.worker mirror --vm "$LT_VM" --join-log "$JLOG" \
   || { echo '[live-transcript] could not start independent archive backup' >&2; exit 1; }
-systemd-run --user --quiet --collect --setenv="LIVE_TRANSCRIPT_CONFIG=$LIVE_TRANSCRIPT_CONFIG" --unit="live-transcript-local-copy-$$" \
+systemd-run --user --quiet --collect --setenv="LIVE_TRANSCRIPT_CONFIG=$LIVE_TRANSCRIPT_CONFIG" --unit="live-transcript-local-copy-$LT_RUN_ID" \
   --property=Restart=on-failure --property=RestartSec=5s \
   "$PYTHON" -m live_transcript.worker mirror --vm "$LT_VM" --join-log "$JLOG" --lane local \
   || { echo '[live-transcript] could not start local safety backup' >&2; exit 1; }
+fi
 touch "$JLOG"
 while true; do
   set +e
@@ -144,8 +149,12 @@ if [ -z "$OUT" ]; then
 fi
 # Archival storage must never hold the meeting launch lock or block the next call.
 flock -u 9
+if [ "$LT_SUPERVISOR" = app ]; then
+  "$PYTHON" -m live_transcript.worker app --key "recovery-$LT_RUN_ID" --submit recover "$LT_VM" "$OUT" "$LT_RUN_ID"
+else
 systemd-run --user --quiet --collect --setenv="LIVE_TRANSCRIPT_CONFIG=$LIVE_TRANSCRIPT_CONFIG" --unit="live-transcript-recovery-$LT_RUN_ID" \
   --property=Restart=on-failure --property=RestartSec=30s --property=Nice=10 \
   "$PYTHON" -m live_transcript.worker recover "$LT_VM" "$OUT" "$LT_RUN_ID"
+fi
 echo "[live-transcript] local VM recording retained at $OUT; asynchronous archive and postprocessing queued"
 [ "$JOIN_STATUS" -eq 0 ] || exit 1

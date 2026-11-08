@@ -63,7 +63,24 @@ def schedule_locked(event, now):
         current = json.loads(path.read_text())
         if current.get("status") in ("started", "complete", "cancelled", "terminal", "missed"):
             return current
+        if get("runtime", "supervisor") == "app":
+            from live_transcript.runtime.application import status
+
+            task = status(current["unit"])
+            if task and task["status"] in ("queued", "starting", "running"):
+                current.update(
+                    verified_at=now,
+                    snapshot=dict(
+                        url=event["url"],
+                        passcode=event.get("passcode"),
+                        end=event["end"].timestamp() if event.get("end") else None,
+                    ),
+                )
+                atomic_json(path, current)
+                return current
         for suffix in (".timer", ".service"):
+            if get("runtime", "supervisor") == "app":
+                break
             active = subprocess.run(
                 ["systemctl", "--user", "is-active", current["unit"] + suffix],
                 capture_output=True,
@@ -102,6 +119,13 @@ def schedule_locked(event, now):
         ),
     )
     atomic_json(path, job)
+    if get("runtime", "supervisor") == "app":
+        from live_transcript.runtime.application import submit
+
+        submit("calendar-dispatch", [str(path)], key=unit, due=launch_at)
+        job["status"] = "scheduled"
+        atomic_json(path, job)
+        return job
     # A retry/reconciliation adopts a previously created timer instead of
     # counting a systemd duplicate-unit error as a successful join.
     active = subprocess.run(
@@ -157,11 +181,16 @@ def reconcile(events, now):
                 job = json.loads(path.read_text())
                 if job.get("status") != "scheduled":
                     continue
-                subprocess.run(
-                    ["systemctl", "--user", "stop", job["unit"] + ".timer"],
-                    capture_output=True,
-                    timeout=5,
-                )
+                if get("runtime", "supervisor") == "app":
+                    from live_transcript.runtime.application import cancel
+
+                    cancel(job["unit"])
+                else:
+                    subprocess.run(
+                        ["systemctl", "--user", "stop", job["unit"] + ".timer"],
+                        capture_output=True,
+                        timeout=5,
+                    )
                 job.update(status="cancelled", cancelled_at=now)
                 atomic_json(path, job)
     for ev in valid.values():
@@ -179,6 +208,19 @@ def dispatch(path):
         except BlockingIOError:
             return
         job = json.loads(path.read_text())
+        # A replacement dispatcher must recognize a launch that reached durable
+        # host bookkeeping before its original parent disappeared.
+        if get("runtime", "supervisor") == "app" and job.get("status") == "dispatching":
+            try:
+                recorded = json.loads(
+                    (Path(get("paths", "logs")) / "current_meeting.json").read_text()
+                )
+            except (OSError, ValueError):
+                recorded = {}
+            if recorded.get("calendar_job") == str(path) and recorded.get("run_id"):
+                job.update(status="started", run_id=recorded["run_id"])
+                atomic_json(path, job)
+                return
         if job.get("status") in ("complete", "started", "cancelled", "terminal", "missed"):
             return
         deadline = job["start"] + 600

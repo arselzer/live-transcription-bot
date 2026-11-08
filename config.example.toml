@@ -74,7 +74,7 @@ silence_finalize = 3.5
 commit_once = true
 
 [model]
-enabled = true # Disable live notes/tickers when no notes endpoint is configured.
+enabled = true # Disable notes/tickers when no model endpoint is configured.
 url = "http://127.0.0.1:8078/v1/chat/completions"
 name = "local-model"
 
@@ -120,6 +120,15 @@ metrics_device = "card0"
 
 [identity]
 name = "Live Transcript · Recording"
+
+[runtime]
+# Docker application exports use "app" with a prepared VM and empty service names.
+supervisor = "systemd"
+max_jobs = 8
+watchdog_seconds = 30
+calendar_seconds = 0
+job_timeout_seconds = 43200
+job_attempts = 6
 
 [admission]
 # Test helpers only; the production meeting owner has its own bounded recovery.

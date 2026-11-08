@@ -60,6 +60,14 @@ DEFAULTS = {
         "cpu_large": "whisper-stt-cpu.service",
         "cpu_small": "whisper-stt-cpu-small.service",
     },
+    "runtime": {
+        "supervisor": "systemd",
+        "max_jobs": 8,
+        "watchdog_seconds": 30,
+        "calendar_seconds": 0,
+        "job_timeout_seconds": 43200,
+        "job_attempts": 6,
+    },
     "audio": {"sink": "transcript"},
     "google": {
         "input_mode": "native",
@@ -187,6 +195,33 @@ def load(path=None):
     if console["login_mode"] == "shared" and not console["shared_login_file"]:
         raise ValueError("console.shared_login_file is required for shared login")
     vm = config["vm"]
+    runtime = config["runtime"]
+    if runtime["supervisor"] not in ("systemd", "app"):
+        raise ValueError("runtime.supervisor must be systemd or app")
+    if (
+        type(runtime["job_timeout_seconds"]) is not int
+        or not 300 <= runtime["job_timeout_seconds"] <= 86400
+        or type(runtime["job_attempts"]) is not int
+        or not 1 <= runtime["job_attempts"] <= 20
+    ):
+        raise ValueError("Invalid application job retry/time budget")
+    if (
+        type(runtime["max_jobs"]) is not int
+        or not 6 <= runtime["max_jobs"] <= 64
+        or any(
+            type(runtime[key]) is not int
+            or runtime[key] not in (0,)
+            and not 10 <= runtime[key] <= 86400
+            for key in ("watchdog_seconds", "calendar_seconds")
+        )
+    ):
+        raise ValueError("Invalid application supervision limits")
+    if runtime["supervisor"] == "app" and (
+        vm["manage_libvirt"] or any(config["services"].values())
+    ):
+        raise ValueError(
+            "App supervision needs a prepared VM and externally supervised speech/captions; set vm.manage_libvirt=false and empty services names"
+        )
     if not vm["python"] or vm["python"].startswith("-") or any(ord(c) < 32 for c in vm["python"]):
         raise ValueError("invalid VM python executable")
     for key in ("identity_file", "known_hosts"):
@@ -341,6 +376,7 @@ def shell_values():
         "LT_SAFETY": get("paths", "safety_copies"),
         "LT_POSTPROCESS_PYTHON": get("paths", "postprocess_python"),
         "LT_MANAGE_LIBVIRT": "1" if get("vm", "manage_libvirt") else "0",
+        "LT_SUPERVISOR": get("runtime", "supervisor"),
         "LT_VAULT": get("paths", "vault"),
     }
     return "\n".join(key + "=" + shlex.quote(value) for key, value in mapping.items())

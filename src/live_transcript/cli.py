@@ -11,6 +11,7 @@ import re
 import shlex
 import shutil
 import socket
+import sqlite3
 import subprocess
 import sys
 import urllib.request
@@ -127,7 +128,14 @@ def check_readiness(*, recording_only=False):
     def add(name, status, detail):
         checks.append(dict(name=name, status=status, detail=detail))
 
-    for name in ("ssh", "rsync", "ffmpeg", "nc", "systemctl", "systemd-run", "flock"):
+    tools = ["ssh", "rsync", "ffmpeg", "nc", "flock"]
+    if get("runtime", "supervisor") == "systemd":
+        tools += ["systemctl", "systemd-run"]
+    else:
+        from live_transcript.runtime.application import ready
+
+        add("application supervisor", "pass" if ready() else "fail", "durable background worker")
+    for name in tools:
         add(
             name,
             "pass" if shutil.which(name) else "fail",
@@ -188,17 +196,20 @@ def check_readiness(*, recording_only=False):
                 add(name, "pass" if data.get("status") == "ok" else "warn", json.dumps(data))
             except Exception as exc:
                 add(name, "warn", "fallback readiness unverified: " + type(exc).__name__)
-    models = get("model", "url").removesuffix("/chat/completions") + "/models"
-    try:
-        with urllib.request.urlopen(models, timeout=3) as response:
-            payload = json.loads(response.read(65536))
-        add(
-            "local model",
-            "pass" if payload.get("data") else "warn",
-            "summaries and recovery planner",
-        )
-    except Exception as exc:
-        add("local model", "warn", "optional service unavailable: " + type(exc).__name__)
+    if not get("model", "enabled"):
+        add("local model", "info", "disabled in this profile")
+    else:
+        models = get("model", "url").removesuffix("/chat/completions") + "/models"
+        try:
+            with urllib.request.urlopen(models, timeout=3) as response:
+                payload = json.loads(response.read(65536))
+            add(
+                "local model",
+                "pass" if payload.get("data") else "warn",
+                "summaries and recovery planner",
+            )
+        except Exception as exc:
+            add("local model", "warn", "optional service unavailable: " + type(exc).__name__)
     if not get("vm", "ssh"):
         add("VM", "fail", "configure vm.ssh")
     else:
@@ -313,10 +324,15 @@ def main(argv=None):
             "setup", help="provision a standalone installation and isolated browser VM"
         )
     )
-    from live_transcript.runtime.containers import export_options
+    from live_transcript.runtime.containers import export_options, application_options
 
     export_options(
         commands.add_parser("backend", help="export a portable Compose caption/speech backend")
+    )
+    application_options(
+        commands.add_parser(
+            "deployment", help="export the complete container application for a prepared browser VM"
+        )
     )
     for name in ("check", "status", "config", "info"):
         command = commands.add_parser(name)
@@ -398,7 +414,7 @@ def main(argv=None):
     )
     process.add_argument("wav")
     serve = commands.add_parser("serve", help="run the caption daemon or a local speech service")
-    serve.add_argument("service", choices=("captions", "asr"))
+    serve.add_argument("service", choices=("captions", "asr", "app"))
     serve.add_argument("arguments", nargs=argparse.REMAINDER)
     bundle = commands.add_parser("bundle", help="build the self-contained browser-guest program")
     bundle.add_argument("output")
@@ -423,11 +439,27 @@ def main(argv=None):
         runtime_config.CONFIG = runtime_config.load()
         from live_transcript.core.config import get, ssh_options
 
-        if args.command == "backend":
+        if args.command == "deployment":
+            from live_transcript.runtime.containers import export_application
+
+            emit(export_application(args), args.json)
+        elif args.command == "backend":
             from live_transcript.runtime.containers import export_backend
 
             emit(export_backend(args), args.json)
         elif args.command == "console":
+            if get("runtime", "supervisor") == "app" and not os.environ.get("LT_APPLICATION_JOB"):
+                from live_transcript.runtime.application import submit, follow
+
+                values = []
+                for flag in ("control", "idle"):
+                    if getattr(args, flag):
+                        values.append("--" + flag)
+                for flag in ("display", "port", "max_min", "listen", "advertise_host"):
+                    value = getattr(args, flag)
+                    if value is not None:
+                        values += ["--" + flag.replace("_", "-"), str(value)]
+                return follow(submit("console", values))
             from live_transcript.runtime.console import open_console
 
             def console_emit(value):
@@ -521,6 +553,10 @@ def main(argv=None):
         elif args.command == "say":
             return subprocess.call(worker_command("tts", "--lang", args.lang, args.text))
         elif args.command == "recover":
+            if get("runtime", "supervisor") == "app" and not os.environ.get("LT_APPLICATION_JOB"):
+                from live_transcript.runtime.application import submit, follow
+
+                return follow(submit("recover", [get("vm", "ssh"), args.guest_wav, args.token]))
             from live_transcript.storage.worker import run
 
             result = run(get("vm", "ssh"), args.guest_wav, args.token)
@@ -529,8 +565,26 @@ def main(argv=None):
         elif args.command == "jobs":
             from live_transcript.storage.worker import recent_jobs
 
-            emit({"jobs": recent_jobs()}, args.json)
+            result = {"jobs": recent_jobs()}
+            if get("runtime", "supervisor") == "app":
+                from live_transcript.runtime.application import Queue
+
+                queue = Queue()
+                try:
+                    result["application_jobs"] = [
+                        {key: row[key] for key in ("id", "status", "due")}
+                        for row in queue.db.execute(
+                            "SELECT id,status,due FROM jobs ORDER BY rowid DESC LIMIT 50"
+                        )
+                    ]
+                finally:
+                    queue.close()
+            emit(result, args.json)
         elif args.command == "process":
+            if get("runtime", "supervisor") == "app" and not os.environ.get("LT_APPLICATION_JOB"):
+                from live_transcript.runtime.application import submit, follow
+
+                return follow(submit("process", [args.wav]))
             from live_transcript.runtime.postprocess import run_logged
 
             run_logged([args.wav])
@@ -571,6 +625,7 @@ def main(argv=None):
         KeyError,
         ImportError,
         RuntimeError,
+        sqlite3.Error,
         subprocess.SubprocessError,
     ) as exc:
         emit(dict(ok=False, error=type(exc).__name__, detail=str(exc)[:400]), args.json)

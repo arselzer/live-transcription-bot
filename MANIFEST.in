@@ -13,7 +13,6 @@ include docs/architecture.md
 include docs/configuration.md
 include docs/deployment.md
 include docs/operations.md
-include docs/research.md
 include docs/testing.md
 include docs/zoom-admission.md
 include pyproject.toml
@@ -168,3 +167,7 @@ include tools/demo_operator_ui.py
 include docs/container-backend.md
 include docs/workspace.md
 include docs/assets/workspace-demo.gif
+include src/live_transcript/runtime/application.py
+include src/live_transcript/runtime/application.Dockerfile
+include tests/test_application_runtime.py
+include docs/application-deployment.md

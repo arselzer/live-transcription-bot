@@ -249,6 +249,8 @@ def _process(argv=None):
 
         # 2) Summary via local Qwen
         def qwen(sysmsg, user, maxtok=2500):
+            if not get("model", "enabled"):
+                raise RuntimeError("Meeting notes model is disabled")
             body = json.dumps(
                 {
                     "model": get("model", "name"),

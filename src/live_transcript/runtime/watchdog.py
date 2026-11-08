@@ -187,6 +187,11 @@ def ensure_backend():
 
 def pending_alive(state, now):
     item = state.get("pending_rejoin", {})
+    if item.get("job"):
+        from live_transcript.runtime.application import status
+
+        task = status(item["job"])
+        return bool(task and task["status"] in ("queued", "starting", "running"))
     try:
         pid = item["pid"]
         value = Path(f"/proc/{pid}/stat").read_text().rsplit(")", 1)[1].split()[19]
@@ -227,6 +232,18 @@ def rejoin(meeting, state, now):
     env = dict(
         os.environ, LT_WAIT_FOR_LOCK="180", LT_EXPECT_RUN_ID=token, LT_DEADLINE=str(deadline)
     )
+    if get("runtime", "supervisor") == "app":
+        from live_transcript.runtime.application import submit, ENV_KEYS
+
+        task = submit(
+            "launch",
+            [meeting["url"], *args],
+            key="rejoin-" + token + "-" + str(history.get(key, 0) + 1),
+            env={key: env[key] for key in ENV_KEYS if key in env},
+        )
+        state.update(last_rejoin=now, pending_rejoin=dict(job=task["id"], at=now))
+        history[key] = history.get(key, 0) + 1
+        return True
     with open(str(Path(get("paths", "logs")) / "rejoin.log"), "ab") as log:
         proc = subprocess.Popen(
             launch_command(meeting["url"], *args),
@@ -253,6 +270,11 @@ def queue_recovery(remote, token):
     if job.exists():
         return
     wav = str(Path(remote["archive"]).with_suffix(".wav"))
+    if get("runtime", "supervisor") == "app":
+        from live_transcript.runtime.application import submit
+
+        submit("recover", [VM, wav, token], key="recovery-" + token)
+        return
     subprocess.run(
         [
             "systemd-run",

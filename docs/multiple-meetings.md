@@ -1,4 +1,4 @@
-# Multiple meetings and audio bridges
+# Multiple meetings
 
 Use one VM per active meeting, including a separate VM for a TTS test sender.
 Each VM owns its playback, microphone, browser, recovery, and recording.
@@ -58,33 +58,3 @@ a viewer leaves the independently supervised VM capture running.
 
 The hub connects existing consoles; provisioning, VM allocation, bridging and
 multi-user access control remain separate work.
-
-## Next architecture layer
-
-A meeting manager should maintain an installation registry and allocate an idle
-VM per session. A session ID should identify the meeting, VM, archive, caption
-stream, and console capability together. Provisioning, meeting lifecycle,
-capture, and inference remain separate components.
-
-A fleet view can show admission, recording health, speech lag, storage, and
-operator activity for each meeting, then open its existing console. Recovery
-must target one session and VM. Losing the manager must not terminate capture.
-Hermes should receive session-scoped links and incidents and use the same
-structured controls as the operator UI.
-
-A shared speech scheduler needs bounded queues and fair allocation per session.
-Model fallback should be explicit and keep original audio for a later accuracy
-pass. The current per-daemon ASR lock is not a fleet-wide scheduler.
-
-## Bridging
-
-Audio bridging is a separate, currently unimplemented feature. A route needs an
-explicit source, destination, mode, gain, and expiry. Start with one-way playback
-or TTS into a dedicated destination microphone. Bidirectional routes need
-echo/loop detection, mix-minus audio, and an immediate mute control.
-
-Archive each meeting's original incoming audio separately from bridge output.
-Log route changes and playback timing so relayed speech is distinguishable from
-the destination's own speakers. Summarized or translated TTS is derived output,
-not an original recording. Meeting text and model responses must not create or
-change routes; those are operator controls.

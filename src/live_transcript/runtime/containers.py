@@ -9,8 +9,187 @@ from pathlib import Path
 import time
 import urllib.request
 from urllib.parse import urlsplit
+from types import SimpleNamespace
 
 from live_transcript.core.files import atomic_json, atomic_text
+
+
+def application_options(parser):
+    parser.add_argument(
+        "directory", help="new empty directory for the complete application deployment"
+    )
+    parser.add_argument("--models", required=True)
+    parser.add_argument("--data", required=True, help="persistent local application data directory")
+    parser.add_argument(
+        "--bind", required=True, help="trusted host bridge IPv4 reachable from the VM"
+    )
+    parser.add_argument("--port", type=int, default=8099, help="caption TCP port")
+    parser.add_argument(
+        "--speech-port", type=int, default=9091, help="loopback-only primary speech port"
+    )
+    parser.add_argument("--small-speech-port", type=int, default=9093)
+    parser.add_argument("--threads", type=int, default=max(1, min(8, os.cpu_count() or 2)))
+    parser.add_argument("--download-models", action="store_true")
+    parser.add_argument(
+        "--model-url", default="", help="notes endpoint reachable from the containers"
+    )
+    parser.add_argument("--model-name", default="local-model")
+
+
+def export_application(args):
+    from live_transcript.core.config import CONFIG, load
+    from live_transcript.runtime.deployment import build_application_wheel
+
+    vm = dict(CONFIG["vm"])
+    if not vm["ssh"] or not vm["identity_file"] or not vm["known_hosts"]:
+        raise ValueError(
+            "Select a prepared VM profile with pinned SSH identity_file and known_hosts"
+        )
+    # Config port checks happen before weight downloads or writing deployment data.
+    ports = [args.port, args.speech_port, args.small_speech_port]
+    if len(set(ports)) != 3 or any(type(p) is not int or not 1 <= p <= 65535 for p in ports):
+        raise ValueError("Caption and speech ports must be valid and distinct")
+    data = Path(args.data).expanduser().absolute()
+    directory = Path(args.directory).expanduser().absolute()
+    if directory.exists() and any(directory.iterdir()):
+        raise ValueError("Export requires an empty directory")
+    # All credentials stay outside the Docker build context. Never modify keys.
+    credentials = []
+    for key in ("identity_file", "known_hosts"):
+        path = Path(vm[key])
+        if not path.is_file() or path.is_symlink() or path.stat().st_uid != os.getuid():
+            raise ValueError("VM SSH credentials must be owned regular files")
+        credentials.append(
+            dict(
+                type="bind",
+                source=str(path).replace("$", "$$"),
+                target="/credentials/" + key,
+                read_only=True,
+            )
+        )
+        vm[key] = "/credentials/" + key
+    vm["manage_libvirt"] = False
+    backend_args = SimpleNamespace(**vars(args), state=str(data / "state"))
+    result = export_backend(backend_args)
+    compose = json.loads((directory / "compose.json").read_text())
+    ident = compose["name"].removeprefix("live-transcript-")
+    for key, port in (("primary", args.speech_port), ("cpu_small", args.small_speech_port)):
+        compose["services"][key]["ports"] = [f"127.0.0.1:{port}:8080"]
+    models = Path(args.models).expanduser().absolute()
+    # A single local state mount is shared with caption ingest, not a network FS.
+    compose["services"]["app"] = dict(
+        image="live-transcript-app:" + ident,
+        pull_policy="never",
+        build=dict(
+            context=".",
+            dockerfile="application.Dockerfile",
+            target="wheel",
+            args=dict(APP_UID=str(os.getuid()), APP_GID=str(os.getgid())),
+        ),
+        user=f"{os.getuid()}:{os.getgid()}",
+        network_mode="host",
+        volumes=[
+            dict(type="bind", source=str(data).replace("$", "$$"), target="/data"),
+            dict(
+                type="bind", source=str(models).replace("$", "$$"), target="/models", read_only=True
+            ),
+            dict(
+                type="bind",
+                source="./application.toml",
+                target="/config/config.toml",
+                read_only=True,
+            ),
+            *credentials,
+        ],
+        read_only=True,
+        tmpfs=["/tmp:size=512m,mode=1777"],
+        cap_drop=["ALL"],
+        security_opt=["no-new-privileges:true"],
+        init=True,
+        restart="unless-stopped",
+        stop_grace_period="45s",
+        pids_limit=512,
+        mem_limit="12g",
+        cpus=args.threads,
+        healthcheck=dict(
+            test=["CMD", "live-transcript", "serve", "app", "--health"],
+            interval="10s",
+            timeout="4s",
+            retries=3,
+            start_period="15s",
+        ),
+        labels={"io.live-transcript.installation": ident},
+    )
+    sections = {
+        "paths": dict(
+            root="/data",
+            state="/data/state",
+            model="/models/ggml-large-v3.bin",
+            small_model="/models/ggml-small.bin",
+            vad="/models/ggml-silero-v6.2.0.bin",
+            whisper_cli="/usr/local/bin/whisper-cli",
+            postprocess_python="/usr/local/bin/python3",
+        ),
+        "vm": vm,
+        "runtime": dict(supervisor="app", watchdog_seconds=30, calendar_seconds=0, max_jobs=8),
+        "services": dict(captions="", primary="", cpu_large="", cpu_small=""),
+        "caption": dict(
+            host=args.bind, port=args.port, stt_url=f"http://127.0.0.1:{args.speech_port}/inference"
+        ),
+        "asr": dict(
+            primary_device="cpu",
+            cpu_url=f"http://127.0.0.1:{args.speech_port}/inference",
+            small_cpu_url=f"http://127.0.0.1:{args.small_speech_port}/inference",
+            cpu_threads=args.threads,
+        ),
+        "model": dict(
+            enabled=bool(args.model_url),
+            url=args.model_url or "http://127.0.0.1:9",
+            name=args.model_name,
+        ),
+        **{
+            key: CONFIG[key]
+            for key in ("audio", "browser", "google", "admission", "recovery", "identity")
+        },
+    }
+    profile = directory / "application.toml"
+    atomic_text(
+        profile,
+        "\n\n".join(
+            "[" + key + "]\n" + "\n".join(k + " = " + json.dumps(v) for k, v in values.items())
+            for key, values in sections.items()
+        )
+        + "\n",
+    )
+    load(profile)  # reject a bad generated profile before any container is started
+    build_application_wheel(directory)
+    source_dockerfile = (
+        files("live_transcript.runtime").joinpath("application.Dockerfile").read_text()
+    )
+    runtime, marker, _ = source_dockerfile.partition(
+        "# Package reviewed source. Exported wheel deployments replace this stage."
+    )
+    if not marker:
+        raise ValueError("Application image runtime stage is unavailable")
+    atomic_text(
+        directory / "application.Dockerfile",
+        runtime
+        + """# Install the reviewed wheel from the bounded build context.
+FROM runtime AS wheel
+USER 0:0
+COPY *.whl /tmp/application/
+RUN python3 -m pip install --no-cache-dir Pillow==13.0.0 /tmp/application/*.whl \\
+    && rm -rf /tmp/application
+USER 10001:10001
+""",
+    )
+    atomic_text(
+        directory / ".dockerignore",
+        "*\n!*.whl\n!backend.pyz\n!application.Dockerfile\n!backend.Dockerfile\n!whisper.Dockerfile\n",
+    )
+    atomic_json(directory / "compose.json", compose)
+    result.update(application=True, profile=str(profile), vm_managed=False)
+    return result
 
 
 def export_options(parser):

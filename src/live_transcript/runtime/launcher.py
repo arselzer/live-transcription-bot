@@ -22,4 +22,13 @@ def environment(base=None):
 
 
 def start(*arguments):
+    from live_transcript.core.config import get
+
+    if get("runtime", "supervisor") == "app" and not os.environ.get("LT_APPLICATION_JOB"):
+        from live_transcript.runtime.application import submit, follow
+
+        job = submit("launch", list(arguments))
+        # Follow the existing CLI's blocking/logging contract. Closing this
+        # reader doesn't own or terminate the durable launch worker.
+        return follow(job, announce=True)
     return subprocess.call(command(*arguments), env=environment())

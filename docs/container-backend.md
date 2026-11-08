@@ -1,5 +1,9 @@
 # Container caption and speech backend
 
+For the controller, UI and final processing in containers as well, use the
+[complete application deployment](application-deployment.md). This narrower
+backend export remains available for existing native controllers.
+
 Use this when you already have a prepared browser VM and want the caption daemon
 and CPU recognition to run under Docker Compose. It packages their Python, SQLite
 and native speech dependencies. Neither apt nor a systemd user manager is needed

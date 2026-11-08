@@ -13,7 +13,6 @@ docs/architecture.md
 docs/configuration.md
 docs/deployment.md
 docs/operations.md
-docs/research.md
 docs/testing.md
 docs/zoom-admission.md
 pyproject.toml
@@ -168,3 +167,7 @@ tools/demo_operator_ui.py
 docs/container-backend.md
 docs/workspace.md
 docs/assets/workspace-demo.gif
+src/live_transcript/runtime/application.py
+src/live_transcript/runtime/application.Dockerfile
+tests/test_application_runtime.py
+docs/application-deployment.md

@@ -11,7 +11,19 @@ the transcript, then switches to the isolated VM console. The workspace shows
 recording health separately from recognition, with optional draft meeting notes.
 See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
 
-## Install and set up
+## Choose a deployment
+
+| Starting point | Deployment |
+| --- | --- |
+| A prepared browser VM is available | [Docker application](docs/application-deployment.md): CLI, UI/backend, retrieval and final recognition in an image, with separate caption/speech services |
+| A new VM needs provisioning | [Native setup below](#native-setup) provisions the VM and media devices automatically |
+| Only caption/speech packaging is needed | [Portable backend](docs/container-backend.md) |
+
+The Docker application host needs Git for the initial source build and Docker
+Engine/Compose. Python, FFmpeg, speech binaries and host systemd user services
+are packaged or replaced inside the deployment. The browser always stays in a VM.
+
+## Native setup
 
 Automatic setup currently supports an x86-64 Linux host with KVM virtualization,
 Python 3.11+, an apt-based distribution, sudo access, and a systemd user manager.
@@ -52,6 +64,11 @@ model weight, recording or credential is included in this repository.
 
 ## Deployment choices
 
+- **Docker application:** `live-transcript --config VM_PROFILE deployment OUTPUT ...`
+  exports the full application and CPU backend for a prepared VM. It includes a
+  durable job supervisor and final recognition tools; host apt/Python/systemd are
+  unnecessary at runtime. The [Docker-only bootstrap](docs/application-deployment.md#build-without-installing-python-on-the-host)
+  also avoids installing Python to prepare it.
 - **Default:** managed browser VM; native host speech services supervised by systemd.
 - **Compose speech:** `live-transcript setup --speech-supervisor compose` runs CPU
   speech services in Docker Compose. Browser, camera and original capture stay in
@@ -120,8 +137,8 @@ sharing the console link before a meeting.
 For concurrent recordings, provision a separate VM/profile for each meeting.
 Use [the console hub](docs/multiple-meetings.md#one-ui-for-several-vms) to switch
 between several VMs in one page, with one login and the selected VM's controls.
-See [multiple meetings and bridging](docs/multiple-meetings.md) for isolation,
-shared speech-service capacity, and the proposed fleet/bridge architecture.
+See [multiple meetings](docs/multiple-meetings.md) for isolation and shared
+speech-service capacity.
 
 ## Join and record a meeting
 

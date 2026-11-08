@@ -21,7 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 # Only this visually reviewed, synthetic documentation animation is allowed as
 # binary source. Replacing it requires an explicit new content review/hash.
 REVIEWED_MEDIA = {
-    "docs/assets/workspace-demo.gif": "696ec21d206d542844a1b027e6c0d59d36a9975271a92c4c55025f035735201a",
+    "docs/assets/workspace-demo.gif": "c750f30827f448b03fb3fd187625e2065ceaab495cd3e83e9ee230396d9fb3f6",
 }
 # The checker must also work before installation and during isolated builds.
 if str(ROOT / "src") not in sys.path:

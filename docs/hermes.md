@@ -7,6 +7,12 @@ installation/agent configuration, not in a committed skill or source file.
 
 ## Install and identify the runtime
 
+For Docker deployments, pin Hermes to a wrapper that runs `docker compose exec
+-T app live-transcript` in the fixed deployment project. The CLI and supervision
+state must be read inside that container's PID namespace. See
+[container integration](application-deployment.md#hermes). The built-in watchdog
+does not send messages or acknowledge notification delivery on Hermes's behalf.
+
 Install and validate the standalone application first. Copy the reusable
 [Hermes skill template](../examples/hermes/SKILL.md) into your private Hermes
 skills directory and configure the executable and profile there. Do not copy
