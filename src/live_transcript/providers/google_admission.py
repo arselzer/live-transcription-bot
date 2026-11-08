@@ -199,6 +199,15 @@ def watch_refusals(page):
 
 
 def checkpoint(page, root, state, data):
+    # A full or unavailable diagnostic disk must not turn a successful join into
+    # a failure, or replace the provider's actual refusal with a storage error.
+    try:
+        _checkpoint(page, root, state, data)
+    except Exception as exc:
+        print("GOOGLE_DIAGNOSTICS unavailable", type(exc).__name__, flush=True)
+
+
+def _checkpoint(page, root, state, data):
     if root is None:
         return
     root = Path(root)
@@ -226,6 +235,104 @@ def checkpoint(page, root, state, data):
         screenshot.chmod(0o600)
     except Exception:
         pass
+
+
+def admit(
+    page,
+    name,
+    *,
+    deadline,
+    timeout=330,
+    operator_timeout=120,
+    manual=False,
+    interaction=None,
+    require_sign_in=False,
+    diagnostics=None,
+    status_file=None,
+    initial_failure=None,
+):
+    """One automatic attempt, then optional passive, deadline-bounded takeover.
+
+    No join clicks, navigation, identity changes, or retry requests are made in
+    the operator window. An explicit host denial remains terminal.
+    """
+
+    def publish(stage, reason="", until=None):
+        info = dict(utc=time.time(), stage=stage, reason=reason)
+        if until is not None:
+            info["deadline"] = time.time() + max(0, until - time.monotonic())
+        if status_file is not None:
+            try:
+                atomic_json(status_file, info)
+            except OSError as exc:
+                print("GOOGLE_ADMISSION status unavailable", type(exc).__name__, flush=True)
+        print("GOOGLE_HANDOFF " + json.dumps(info), flush=True)
+
+    failure = initial_failure
+    if time.monotonic() >= deadline:
+        failure = AdmissionRefused("Original meeting deadline expired", "google_admission_timeout")
+        publish("rejected", failure.reason)
+        raise failure
+    if not manual and failure is None:
+        publish("joining")
+        try:
+            prejoin(
+                page,
+                name,
+                timeout=max(0, min(timeout, deadline - time.monotonic())),
+                interaction=interaction,
+                require_sign_in=require_sign_in,
+                diagnostics=diagnostics,
+            )
+            publish("admitted")
+            return "automatic"
+        except AdmissionRefused as exc:
+            failure = exc
+        except Exception as exc:
+            # This is a process boundary: an unexpected observer/locator error
+            # must leave the owned browser available for manual recovery too.
+            failure = AdmissionRefused(
+                "Google UI observation failed: " + type(exc).__name__, "google_ui_unavailable"
+            )
+            print("GOOGLE_ADMISSION automation unavailable", type(exc).__name__, flush=True)
+    if failure is not None and failure.reason == "host_denied":
+        publish("rejected", failure.reason)
+        raise failure
+    until = min(deadline, time.monotonic() + (timeout if manual else operator_timeout))
+    reason = failure.reason if failure else "manual_join"
+    if time.monotonic() < until:
+        publish("needs_operator", reason, until)
+        print(
+            "Google joining paused; use the operator console within the remaining time", flush=True
+        )
+    while time.monotonic() < until:
+        if page.is_closed():
+            break
+        try:
+            data = inspect(page)
+            state = classify(data, url=page.url)
+            if state.stage == "admitted":
+                checkpoint(page, diagnostics, state, data)
+                publish("admitted")
+                return "operator"
+            if state.reason == "host_denied":
+                failure = AdmissionRefused("The host denied admission", "host_denied")
+                break
+        except Exception:
+            # A navigation or DOM replacement during manual recovery is expected;
+            # it must not close the browser underneath its operator.
+            pass
+        try:
+            page.wait_for_timeout(500)
+        except Exception:
+            if page.is_closed():
+                break
+            time.sleep(0.25)
+    failure = failure or AdmissionRefused(
+        "Manual admission was not confirmed before the deadline", "google_admission_timeout"
+    )
+    publish("rejected", failure.reason)
+    raise failure
 
 
 def prejoin(page, name, timeout=330, *, interaction=None, require_sign_in=False, diagnostics=None):
@@ -368,6 +475,6 @@ def prejoin(page, name, timeout=330, *, interaction=None, require_sign_in=False,
                 continue
             raise
     raise AdmissionRefused(
-        f"No confirmed admission within {timeout:g} seconds; no recording started",
+        f"No confirmed admission within {timeout:g} seconds",
         "google_admission_timeout",
     )

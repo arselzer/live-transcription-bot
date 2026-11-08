@@ -25,6 +25,10 @@ class ConfigurationTests(unittest.TestCase):
             '[console]\nlogin_mode="shared"',
             "[console]\nsession_seconds=59",
             "[console]\nsession_seconds=86401",
+            "[google]\noperator_recovery_seconds=-1",
+            "[google]\noperator_recovery_seconds=601",
+            "[google]\noperator_recovery_seconds=inf",
+            '[google]\nmanual_join="yes"',
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory() as d:
                 path = Path(d) / "config.toml"

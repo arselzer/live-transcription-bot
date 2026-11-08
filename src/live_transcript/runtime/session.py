@@ -128,6 +128,11 @@ def status(token):
                 and audio.get("progress_age", 99) < 20
             )
             result["archive_state"] = health.get("state", "recording")
+            from live_transcript.providers.admission import read_status
+
+            admission = read_status(root)
+            if admission:
+                result["admission"] = admission
             try:
                 ui = json.loads((root / "ui-health.json").read_text())
                 result["ui_health"] = ui

@@ -34,6 +34,11 @@ The launcher exports only guest-relevant settings to the guest's default config
 location. Host paths, vault and calendar settings are excluded. The launcher deploys the
 guest configuration separately from its application bundle.
 
+`google.manual_join=true` waits for an operator to join through the console.
+`google.operator_recovery_seconds` defaults to 120 and controls the passive
+takeover window after an automatic join error; set it to zero to disable it.
+Both modes retain join evidence and respect the original meeting deadline.
+
 `google.browser_media_hooks=false` leaves the browser microphone and WebRTC APIs
 unmodified for admission diagnostics. It disables browser TTS and RTP counters;
 transport records report `available=false`. Native audio recording, screenshots,

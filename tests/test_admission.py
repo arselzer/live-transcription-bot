@@ -7,6 +7,41 @@ import live_transcript.providers.admission as admission
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_console_status_rejects_corrupt_types_and_invalid_deadlines(self):
+        for raw in (
+            [],
+            None,
+            dict(stage="unknown", utc=1),
+            dict(stage="needs_operator", utc=1),
+            dict(stage="needs_operator", utc=1, deadline=float("nan")),
+            dict(stage="joining", utc=True),
+            dict(stage="joining", utc=1, reason="untrusted content"),
+        ):
+            with self.subTest(raw=raw), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "admission.json").write_text(json.dumps(raw))
+                self.assertIsNone(admission.read_status(root))
+
+    def test_console_status_exports_only_admission_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "admission.json").write_text(
+                json.dumps(
+                    dict(
+                        stage="needs_operator",
+                        utc=1,
+                        deadline=5,
+                        reason="google_join_refused",
+                        cookie="fixture-private-value",
+                        url="https://example.invalid/?token=fixture",
+                    )
+                )
+            )
+            self.assertEqual(
+                admission.read_status(root),
+                dict(stage="needs_operator", utc=1, deadline=5, reason="google_join_refused"),
+            )
+
     def test_explicit_provider_blocks_are_precise(self):
         for text, expected in [
             ("Automated bots aren't allowed to join this meeting.", "zoom_automation_blocked"),

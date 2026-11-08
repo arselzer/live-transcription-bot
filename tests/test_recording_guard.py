@@ -38,6 +38,20 @@ class ArchiveTests(unittest.TestCase):
             self.assertNotEqual(a[component][-1], b[component][-1])
             self.assertIn("-n", a[component])
 
+    def test_full_desktop_capture_does_not_crop_taller_consoles(self):
+        options = commands(self.root, "unique", ":99")
+        for component in ("screen", "snapshots"):
+            self.assertNotIn("-video_size", options[component])
+        self.assertIn("pad=ceil(iw/2)*2:ceil(ih/2)*2", options["screen"])
+
+    def test_admission_state_is_part_of_the_verified_inventory(self):
+        atomic_json(self.root / "admission.json", dict(stage="needs_operator"))
+        seal(self.root)
+        self.assertEqual(verify_archive(self.root), 1)
+        atomic_json(self.root / "admission.json", dict(stage="admitted"))
+        with self.assertRaises(ValueError):
+            verify_archive(self.root)
+
     def test_dead_component_restarts_without_stopping_other_captures(self):
         guard = Guard(self.root, self.config())
         for name in ("audio", "screen", "snapshots", "observer"):

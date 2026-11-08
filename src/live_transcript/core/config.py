@@ -61,7 +61,13 @@ DEFAULTS = {
         "cpu_small": "whisper-stt-cpu-small.service",
     },
     "audio": {"sink": "transcript"},
-    "google": {"input_mode": "native", "admission_timeout": 330.0, "browser_media_hooks": True},
+    "google": {
+        "input_mode": "native",
+        "admission_timeout": 330.0,
+        "browser_media_hooks": True,
+        "manual_join": False,
+        "operator_recovery_seconds": 120.0,
+    },
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
     "console": {"login_mode": "isolated", "shared_login_file": "", "session_seconds": 7200},
     "caption": {
@@ -209,6 +215,8 @@ def load(path=None):
         raise ValueError("google.input_mode must be native or dom")
     if not 1 <= config["google"]["admission_timeout"] <= 600:
         raise ValueError("google.admission_timeout must be between 1 and 600 seconds")
+    if not 0 <= config["google"]["operator_recovery_seconds"] <= 600:
+        raise ValueError("google.operator_recovery_seconds must be between 0 and 600 seconds")
     if config["browser"]["google_mode"] not in ("cdp", "playwright"):
         raise ValueError("browser.google_mode must be cdp or playwright")
     executable = config["browser"]["google_executable"]

@@ -30,6 +30,7 @@ from live_transcript.providers.google_admission import (
     visible as visible,
     joined as joined,
     prejoin as prejoin,
+    admit,
     navigation_url,
     watch_refusals,
 )
@@ -138,6 +139,32 @@ def configure_media_hooks(context):
     return True
 
 
+def monitor_audio(children, output, log):
+    """The convenience WAV may fail independently of the archival recorder."""
+    return optional_feature(
+        lambda: children.start(
+            [
+                "ffmpeg",
+                "-nostdin",
+                "-loglevel",
+                "error",
+                "-f",
+                "pulse",
+                "-i",
+                get("audio", "sink") + ".monitor",
+                "-ac",
+                "1",
+                "-ar",
+                "16000",
+                "-n",
+                str(output),
+            ],
+            log,
+        ),
+        "convenience WAV",
+    )
+
+
 class Children:
     """Own complete process groups, including renderer/capture descendants."""
 
@@ -227,16 +254,41 @@ def run(argv=None):
     recording = False
     ctx = None
     archive = None
+    session_deadline = time.monotonic() + max(
+        0,
+        min(
+            a.max_min * 60,
+            float(os.environ.get("LT_DEADLINE", time.time() + a.max_min * 60)) - time.time(),
+        ),
+    )
     for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
         signal.signal(sig, lambda *_: (_ for _ in ()).throw(SystemExit(0)))
     try:
         with sync_playwright() as p, ExitStack() as browser_stack:
             try:
                 if not a.dry:
-                    # Pre-arm only the camera writer, not audio capture, before Chrome
-                    # enumerates V4L2. The renderer must win the device format race.
+                    if session_deadline <= time.monotonic():
+                        raise AdmissionRefused(
+                            "Original meeting deadline expired", "google_admission_timeout"
+                        )
+                    # Archive the complete join/recovery sequence independently
+                    # of browser automation and caption transport.
+                    archive = Archive(out)
+                    evidence_started = time.time()
+                    evidence_clock = time.monotonic()
+                    archive.start(
+                        evidence_started,
+                        max(0, session_deadline - time.monotonic()),
+                        provider="google",
+                    )
+                    print("ARCHIVE to", archive.root, flush=True)
+                    # Pre-arm the camera writer before Chrome enumerates V4L2.
+                    # The renderer must win the device format race.
                     Path("/tmp/cap_session_start").write_text(str(int(time.time())))
-                    renderer = children.start(worker_command("render"), "/tmp/meet-render.log")
+                    renderer = optional_feature(
+                        lambda: children.start(worker_command("render"), "/tmp/meet-render.log"),
+                        "caption camera",
+                    )
                     time.sleep(3)
                 from live_transcript.providers.browser import google_context
 
@@ -266,10 +318,24 @@ def run(argv=None):
                 media_hooks = configure_media_hooks(ctx)
                 print("GOOGLE_MEDIA_HOOKS", "enabled" if media_hooks else "disabled", flush=True)
                 pg = ctx.new_page()
+                pg.set_default_timeout(2500)
                 pg.set_viewport_size({"width": 1280, "height": 800})
                 pg.on("dialog", lambda dialog: dialog.dismiss())
                 watch_refusals(pg)
-                pg.goto(navigation_url(a.meeting), wait_until="domcontentloaded", timeout=60000)
+                navigation_failure = None
+                try:
+                    pg.goto(
+                        navigation_url(a.meeting),
+                        wait_until="domcontentloaded",
+                        timeout=max(1, min(60000, (session_deadline - time.monotonic()) * 1000)),
+                    )
+                except Exception as exc:
+                    if a.dry:
+                        raise
+                    navigation_failure = AdmissionRefused(
+                        "Google navigation failed: " + type(exc).__name__,
+                        "google_navigation_failed",
+                    )
                 if a.dry:
                     pg.wait_for_timeout(8000)
                     pg.screenshot(path=str(out.parent / "meet-prejoin.png"))
@@ -284,37 +350,45 @@ def run(argv=None):
                     print("DRY: inspected pre-join; did not join or record", flush=True)
                     return
                 interaction = None
-                if get("google", "input_mode") == "native":
+                if (
+                    not get("google", "manual_join")
+                    and navigation_failure is None
+                    and get("google", "input_mode") == "native"
+                ):
                     from live_transcript.providers.interaction import NativeInput, NativeInputError
 
                     try:
                         interaction = NativeInput(pg)
                     except NativeInputError as exc:
-                        raise AdmissionRefused(str(exc), "google_input_unavailable") from exc
-                remaining = min(
-                    a.max_min * 60,
-                    float(os.environ.get("LT_DEADLINE", time.time() + a.max_min * 60))
-                    - time.time(),
-                )
+                        navigation_failure = AdmissionRefused(str(exc), "google_input_unavailable")
+                remaining = session_deadline - time.monotonic()
                 if remaining <= 0:
                     raise AdmissionRefused(
                         "Original meeting deadline expired", "google_admission_timeout"
                     )
-                prejoin(
+                join_mode = admit(
                     pg,
                     a.name,
+                    deadline=session_deadline,
                     timeout=min(get("google", "admission_timeout"), remaining),
+                    operator_timeout=get("google", "operator_recovery_seconds"),
+                    manual=get("google", "manual_join"),
                     interaction=interaction,
                     require_sign_in=not get("browser", "google_private"),
                     diagnostics=out.with_suffix(".admission"),
+                    status_file=archive.root / "admission.json",
+                    initial_failure=navigation_failure,
                 )
                 print("JOINED Google Meet (Leave call confirmed)", flush=True)
                 print(
                     "ADMISSION_SUCCEEDED "
                     + json.dumps(
                         dict(
-                            name=a.name if get("browser", "google_private") else None,
+                            name=a.name
+                            if get("browser", "google_private") and join_mode == "automatic"
+                            else None,
                             provider="google",
+                            join_mode=join_mode,
                             identity_source="guest"
                             if get("browser", "google_private")
                             else "profile",
@@ -322,61 +396,42 @@ def run(argv=None):
                     ),
                     flush=True,
                 )
-                t0 = time.monotonic()
+                t0 = evidence_clock
                 started = time.time()
-                (VM_HOME / "rec" / "speakers.jsonl").write_text("")
-                Path("/tmp/cap_session_start").write_text(str(started))
-                archive = Archive(out)
-                remaining = min(
-                    a.max_min * 60,
-                    float(os.environ.get("LT_DEADLINE", started + a.max_min * 60)) - started,
+                optional_feature(
+                    lambda: (VM_HOME / "rec" / "speakers.jsonl").write_text(""), "live speaker log"
                 )
+                # Captions, voice events and browser speaker observations share
+                # the archive's clock, including the prejoin interval.
+                Path("/tmp/cap_session_start").write_text(str(evidence_started))
+                remaining = session_deadline - time.monotonic()
                 if remaining <= 0:
                     raise AdmissionRefused(
                         "Original meeting deadline expired", "google_admission_timeout"
                     )
-                recording_deadline = time.monotonic() + remaining
-                archive.start(started, remaining, provider="google")
-                import shutil
-
-                if out.with_suffix(".admission").is_dir():
-                    optional_feature(
-                        lambda: shutil.copytree(
-                            out.with_suffix(".admission"), archive.root / "admission"
-                        ),
-                        "admission evidence copy",
-                    )
-                print("ARCHIVE to", archive.root, flush=True)
+                recording_deadline = session_deadline
+                event(archive.root, "admission_confirmed", recording_started=started)
                 # Record immediately after admission, before camera setup delays.
-                audio = children.start(
-                    [
-                        "ffmpeg",
-                        "-nostdin",
-                        "-loglevel",
-                        "error",
-                        "-f",
-                        "pulse",
-                        "-i",
-                        get("audio", "sink") + ".monitor",
-                        "-ac",
-                        "1",
-                        "-ar",
-                        "16000",
-                        "-n",
-                        str(out),
-                    ],
-                    str(out) + ".ffmpeg.log",
-                )
-                event(archive.root, "primary_capture_started", file=out.name)
+                audio = monitor_audio(children, out, str(out) + ".ffmpeg.log")
+                if audio is not None:
+                    event(archive.root, "primary_capture_started", file=out.name)
+                    print("RECORDING to", out, flush=True)
+                else:
+                    print("RECORDING independent archive; convenience WAV unavailable", flush=True)
                 recording = True
-                print("RECORDING to", out, flush=True)
                 Path(str(out) + ".json").write_text(
                     json.dumps(
                         {
                             "out": str(out),
-                            "started": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                            "started": time.strftime(
+                                "%Y-%m-%dT%H:%M:%S%z", time.localtime(evidence_started)
+                            ),
+                            "admitted_at": started,
+                            "join_mode": join_mode,
                             "meeting": public_url(a.meeting),
-                            "name": a.name if get("browser", "google_private") else None,
+                            "name": a.name
+                            if get("browser", "google_private") and join_mode == "automatic"
+                            else None,
                             "requested_name": a.name,
                             "identity_source": "guest"
                             if get("browser", "google_private")
@@ -385,38 +440,47 @@ def run(argv=None):
                         }
                     )
                 )
-                streamer = children.start(
-                    worker_command("stream", out.stem, "--no-video"), "/tmp/capstream.log"
+                streamer = optional_feature(
+                    lambda: children.start(
+                        worker_command("stream", out.stem, "--no-video"), "/tmp/capstream.log"
+                    ),
+                    "caption transport",
                 )
-                children.start(
-                    [
-                        "ffmpeg",
-                        "-nostdin",
-                        "-loglevel",
-                        "error",
-                        "-f",
-                        "x11grab",
-                        "-framerate",
-                        "5",
-                        "-video_size",
-                        "1280x800",
-                        "-i",
-                        os.environ["DISPLAY"],
-                        "-c:v",
-                        "libx264",
-                        "-preset",
-                        "ultrafast",
-                        "-crf",
-                        "30",
-                        "-pix_fmt",
-                        "yuv420p",
-                        "-n",
-                        str(out.with_suffix("")) + "-screen.mp4",
-                    ],
-                    str(out) + ".screen.log",
+                optional_feature(
+                    lambda: children.start(
+                        [
+                            "ffmpeg",
+                            "-nostdin",
+                            "-loglevel",
+                            "error",
+                            "-f",
+                            "x11grab",
+                            "-framerate",
+                            "5",
+                            "-i",
+                            os.environ["DISPLAY"],
+                            "-vf",
+                            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
+                            "-c:v",
+                            "libx264",
+                            "-preset",
+                            "ultrafast",
+                            "-crf",
+                            "30",
+                            "-pix_fmt",
+                            "yuv420p",
+                            "-n",
+                            str(out.with_suffix("")) + "-screen.mp4",
+                        ],
+                        str(out) + ".screen.log",
+                    ),
+                    "convenience screen video",
                 )
                 voice = (
-                    VoiceController(pg, out.stem, a.name, provider="google")
+                    optional_feature(
+                        lambda: VoiceController(pg, out.stem, a.name, provider="google"),
+                        "voice controls",
+                    )
                     if media_hooks
                     else None
                 )
@@ -428,6 +492,8 @@ def run(argv=None):
                 last_audio_bytes = 0
                 next_camera_attempt = 0
                 next_streamer_attempt = 0
+                next_renderer_attempt = 0
+                next_audio_attempt = 0
                 renderer_started = time.monotonic()
                 while time.monotonic() < recording_deadline:
                     if pg.is_closed():
@@ -457,7 +523,7 @@ def run(argv=None):
                         if now >= next_camera_attempt:
                             click_if_visible(pg, "Turn on camera")
                             next_camera_attempt = now + 15
-                    if audio.poll() is not None:
+                    if now >= next_audio_attempt and (audio is None or audio.poll() is not None):
                         # The full-quality lossless archive remains independent.
                         # Never abandon the call because the convenience WAV died.
                         print(
@@ -465,51 +531,55 @@ def run(argv=None):
                             flush=True,
                         )
                         fallback = archive.root / f"fallback-{time.time_ns()}.wav"
-                        audio = children.start(
-                            [
-                                "ffmpeg",
-                                "-nostdin",
-                                "-loglevel",
-                                "error",
-                                "-f",
-                                "pulse",
-                                "-i",
-                                get("audio", "sink") + ".monitor",
-                                "-ac",
-                                "1",
-                                "-ar",
-                                "16000",
-                                "-n",
-                                str(fallback),
-                            ],
-                            str(out) + ".ffmpeg.log",
-                        )
-                        event(archive.root, "primary_capture_started", file=fallback.name)
+                        audio = monitor_audio(children, fallback, str(out) + ".ffmpeg.log")
+                        next_audio_attempt = now + 10
+                        if audio is not None:
+                            event(archive.root, "primary_capture_started", file=fallback.name)
                     hb = Path("/tmp/caprender.hb")
                     stale = now - renderer_started > 20 and (
                         not hb.exists() or time.time() - hb.stat().st_mtime > 20
                     )
-                    if renderer.poll() is not None or stale:
+                    if now >= next_renderer_attempt and (
+                        renderer is None or renderer.poll() is not None or stale
+                    ):
                         # Release Chrome's camera reader before restarting a stalled
                         # writer, so the writer wins the V4L2 format negotiation.
                         click_if_visible(pg, "Turn off camera")
-                        children.stop(renderer)
-                        renderer = children.start(worker_command("render"), "/tmp/meet-render.log")
+                        if renderer is not None:
+                            children.stop(renderer)
+                        renderer = optional_feature(
+                            lambda: children.start(
+                                worker_command("render"), "/tmp/meet-render.log"
+                            ),
+                            "caption camera",
+                        )
                         renderer_started = now
+                        next_renderer_attempt = now + 10
                         next_camera_attempt = now + 5
-                    if streamer.poll() is not None and now >= next_streamer_attempt:
+                    if now >= next_streamer_attempt and (
+                        streamer is None or streamer.poll() is not None
+                    ):
                         print(
                             "Caption streamer stopped; recording continues while captions restart",
                             flush=True,
                         )
-                        children.stop(streamer)
-                        streamer = children.start(
-                            worker_command("stream", out.stem, "--no-video"), "/tmp/capstream.log"
+                        if streamer is not None:
+                            children.stop(streamer)
+                        streamer = optional_feature(
+                            lambda: children.start(
+                                worker_command("stream", out.stem, "--no-video"),
+                                "/tmp/capstream.log",
+                            ),
+                            "caption transport",
                         )
                         next_streamer_attempt = now + 10
                     who = optional_feature(lambda: pg.evaluate(SPEAKERS_JS), "live speakers", [])
-                    with open(VM_HOME / "rec" / "speakers.jsonl", "a") as fh:
-                        fh.write(json.dumps({"t": round(now - t0, 2), "who": who}) + "\n")
+
+                    def save_speakers():
+                        with open(VM_HOME / "rec" / "speakers.jsonl", "a") as fh:
+                            fh.write(json.dumps({"t": round(now - t0, 2), "who": who}) + "\n")
+
+                    optional_feature(save_speakers, "live speaker log")
                     if voice is not None:
                         optional_feature(voice.poll, "voice queue")
                     if now >= next_stats:
@@ -565,6 +635,17 @@ def run(argv=None):
             finally:
                 children.close()
                 if archive:
+                    import shutil
+
+                    if out.with_suffix(".admission").is_dir():
+                        optional_feature(
+                            lambda: shutil.copytree(
+                                out.with_suffix(".admission"),
+                                archive.root / "admission",
+                                dirs_exist_ok=True,
+                            ),
+                            "admission evidence copy",
+                        )
                     try:
                         archive.stop()
                     except Exception as exc:

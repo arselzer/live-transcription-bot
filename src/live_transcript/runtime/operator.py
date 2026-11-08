@@ -222,6 +222,7 @@ class OperatorServer(ThreadingHTTPServer):
         self.cached_status = None
         self.status_lock = threading.Lock()
         self.last_capture_state = None
+        self.last_admission_state = None
         self.last_speech_error = False
         self.last_interaction = 0
         self.monitor_stop = threading.Event()
@@ -261,6 +262,10 @@ class OperatorServer(ThreadingHTTPServer):
                 and capture["age"] < 20
                 and capture.get("audio", {}).get("running")
                 and capture.get("screen", {}).get("running")
+                and all(
+                    capture.get(part, {}).get("progress_age", 1000) + capture["age"] < 20
+                    for part in ("audio", "screen")
+                )
             )
             capture_state = "healthy" if healthy else "attention" if capture else "pending"
             if capture is None and self.last_capture_state in ("healthy", "attention"):
@@ -276,6 +281,24 @@ class OperatorServer(ThreadingHTTPServer):
                     level="warning" if capture_state == "attention" else "info",
                 )
                 self.last_capture_state = capture_state
+            admission = value.get("admission") or {}
+            stage = admission.get("stage")
+            admission_state = (stage, admission.get("utc"))
+            if (
+                stage in ("joining", "needs_operator", "admitted", "rejected")
+                and admission_state != self.last_admission_state
+            ):
+                self.events.add(
+                    "admission_" + stage,
+                    {
+                        "joining": "Joining the meeting",
+                        "needs_operator": "Google admission needs manual control in the console",
+                        "admitted": "Meeting admission confirmed",
+                        "rejected": "Meeting admission was not confirmed",
+                    }[stage],
+                    level="warning" if stage in ("needs_operator", "rejected") else "info",
+                )
+                self.last_admission_state = admission_state
             speech = value.get("speech")
             if speech is not None:
                 failed = bool(speech.get("decode_error"))

@@ -267,6 +267,143 @@ class GoogleMeetTests(unittest.TestCase):
             validate_candidates(data)
 
 
+class GoogleRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        self.page = MagicMock(url="https://meet.google.com/abc-abcd-efg")
+        self.page.is_closed.return_value = False
+        self.page.evaluate.return_value = dict(name_field=True, controls=["Join now"])
+        self.clock = 0
+        self.page.wait_for_timeout.side_effect = self.advance
+        clock = patch.object(google_ui.time, "monotonic", side_effect=lambda: self.clock)
+        clock.start()
+        self.addCleanup(clock.stop)
+
+    def advance(self, milliseconds):
+        self.clock += milliseconds / 1000
+
+    def test_refusal_hands_off_once_and_accepts_independent_manual_admission(self):
+        self.page.evaluate.side_effect = [
+            dict(body="You can't join this video call"),
+            dict(controls=["Leave call", "Present now"]),
+        ]
+        refusal = google_ui.AdmissionRefused("Permission error", "google_join_refused")
+        interaction = MagicMock()
+        with patch.object(google_ui, "prejoin", side_effect=refusal) as automatic:
+            google_ui.admit(
+                self.page, "Recorder", deadline=10, operator_timeout=3, interaction=interaction
+            )
+        self.assertEqual(automatic.call_count, 1)
+        interaction.click.assert_not_called()
+        self.page.goto.assert_not_called()
+        self.assertEqual(self.clock, 0.5)
+
+    def test_expiry_retains_provider_reason_and_never_extends_session_deadline(self):
+        refusal = google_ui.AdmissionRefused("Permission error", "google_join_refused")
+        with patch.object(google_ui, "prejoin", side_effect=refusal):
+            with self.assertRaises(google_ui.AdmissionRefused) as caught:
+                google_ui.admit(self.page, "Recorder", deadline=2, operator_timeout=120)
+        self.assertIs(caught.exception, refusal)
+        self.assertEqual(self.clock, 2)
+        self.page.goto.assert_not_called()
+
+    def test_host_denial_never_opens_recovery_or_retries(self):
+        refusal = google_ui.AdmissionRefused("Host denied admission", "host_denied")
+        with patch.object(google_ui, "prejoin", side_effect=refusal):
+            with self.assertRaises(google_ui.AdmissionRefused) as caught:
+                google_ui.admit(self.page, "Recorder", deadline=10)
+        self.assertIs(caught.exception, refusal)
+        self.page.wait_for_timeout.assert_not_called()
+        self.page.evaluate.assert_not_called()
+
+    def test_zero_recovery_stops_immediately(self):
+        refusal = google_ui.AdmissionRefused("Input failed", "google_input_unavailable")
+        with patch.object(google_ui, "prejoin", side_effect=refusal):
+            with self.assertRaises(google_ui.AdmissionRefused):
+                google_ui.admit(self.page, "Recorder", deadline=10, operator_timeout=0)
+        self.page.wait_for_timeout.assert_not_called()
+
+    def test_manual_mode_makes_no_automatic_attempt_and_survives_dom_replacement(self):
+        self.page.evaluate.side_effect = [
+            RuntimeError("Execution context was destroyed"),
+            dict(controls=["Leave call", "Present now"]),
+        ]
+        with patch.object(google_ui, "prejoin") as automatic:
+            google_ui.admit(self.page, "Recorder", deadline=10, manual=True)
+        automatic.assert_not_called()
+        self.assertEqual(self.clock, 0.5)
+
+    def test_foreign_toolbar_cannot_complete_manual_recovery(self):
+        self.page.url = "https://example.invalid/"
+        self.page.evaluate.return_value = dict(controls=["Leave call", "Present now"])
+        with self.assertRaises(google_ui.AdmissionRefused) as caught:
+            google_ui.admit(self.page, "Recorder", deadline=1, manual=True)
+        self.assertEqual(caught.exception.reason, "google_admission_timeout")
+
+    def test_closed_browser_finishes_recovery_without_polling(self):
+        self.page.is_closed.return_value = True
+        with self.assertRaises(google_ui.AdmissionRefused):
+            google_ui.admit(self.page, "Recorder", deadline=10, manual=True)
+        self.page.evaluate.assert_not_called()
+        self.page.wait_for_timeout.assert_not_called()
+
+    def test_expired_session_makes_no_automatic_attempt(self):
+        with patch.object(google_ui, "prejoin") as automatic:
+            with self.assertRaises(google_ui.AdmissionRefused):
+                google_ui.admit(self.page, "Recorder", deadline=0)
+        automatic.assert_not_called()
+
+    def test_failed_navigation_can_be_recovered_without_an_automatic_click(self):
+        self.page.evaluate.return_value = dict(controls=["Leave call", "Present now"])
+        with patch.object(google_ui, "prejoin") as automatic:
+            google_ui.admit(
+                self.page,
+                "Recorder",
+                deadline=10,
+                initial_failure=google_ui.AdmissionRefused(
+                    "Navigation timed out", "google_navigation_failed"
+                ),
+            )
+        automatic.assert_not_called()
+
+    def test_unexpected_automation_error_allows_passive_operator_recovery(self):
+        self.page.evaluate.return_value = dict(controls=["Leave call", "Present now"])
+        with patch.object(
+            google_ui, "prejoin", side_effect=ValueError("observer unavailable")
+        ) as automatic:
+            result = google_ui.admit(self.page, "Recorder", deadline=10)
+        self.assertEqual(result, "operator")
+        self.assertEqual(automatic.call_count, 1)
+        self.page.goto.assert_not_called()
+
+    def test_manual_admission_status_is_private_and_contains_no_page_contents(self):
+        import json
+
+        self.page.evaluate.return_value = dict(
+            controls=["Leave call", "Present now"], body="fixture-private-content"
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            status = Path(directory) / "admission.json"
+            google_ui.admit(self.page, "Recorder", deadline=10, manual=True, status_file=status)
+            self.assertEqual(json.loads(status.read_text())["stage"], "admitted")
+            self.assertNotIn("fixture-private-content", status.read_text())
+            self.assertEqual(status.stat().st_mode & 0o777, 0o600)
+
+    def test_diagnostic_disk_failure_does_not_abort_an_admitted_session(self):
+        self.page.evaluate.return_value = dict(controls=["Leave call", "Present now"])
+        with patch.object(google_ui, "atomic_json", side_effect=OSError("disk full")):
+            google_ui.admit(
+                self.page,
+                "Recorder",
+                deadline=10,
+                manual=True,
+                status_file=Path("/example/admission.json"),
+            )
+        with patch.object(google_ui, "_checkpoint", side_effect=OSError("disk full")):
+            google_ui.checkpoint(
+                self.page, Path("/example/diagnostics"), google_ui.AdmissionState("admitted"), {}
+            )
+
+
 class GoogleStateTests(unittest.TestCase):
     def test_foreign_toolbar_cannot_prove_admission(self):
         page = MagicMock(url="https://example.invalid/")

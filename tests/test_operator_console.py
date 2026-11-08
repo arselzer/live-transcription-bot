@@ -206,7 +206,11 @@ class ConsoleHTTPTests(unittest.TestCase):
 
     def test_monitor_reports_transitions_without_duplicate_healthy_events(self):
         self.bridge.call.return_value = dict(
-            capture=dict(age=1, audio=dict(running=True), screen=dict(running=True))
+            capture=dict(
+                age=1,
+                audio=dict(running=True, progress_age=0),
+                screen=dict(running=True, progress_age=0),
+            )
         )
         self.server.status()
         self.server.cached_status = None
@@ -224,13 +228,44 @@ class ConsoleHTTPTests(unittest.TestCase):
         self.assertEqual(len(self.events.recent()), 1)
         self.assertNotIn("not recorded", self.events.path.read_text())
 
+    def test_running_but_stalled_writers_do_not_report_healthy_capture(self):
+        self.bridge.call.return_value = dict(
+            capture=dict(
+                age=2,
+                audio=dict(running=True, progress_age=19),
+                screen=dict(running=True, progress_age=0),
+            )
+        )
+        self.server.status()
+        self.assertEqual(self.events.recent()[-1]["kind"], "capture_attention")
+
+    def test_admission_alert_is_deduplicated_without_disclosing_page_data(self):
+        self.bridge.call.return_value = dict(
+            capture=None,
+            admission=dict(utc=1, stage="needs_operator", reason="google_join_refused", deadline=2),
+        )
+        self.server.status()
+        self.server.cached_status = None
+        self.server.status()
+        events = [event for event in self.events.recent() if event["kind"].startswith("admission_")]
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["level"], "warning")
+        self.server.cached_status = None
+        self.bridge.call.return_value["admission"] = dict(utc=2, stage="admitted", reason="")
+        self.server.status()
+        self.assertEqual(self.events.recent()[-1]["kind"], "admission_admitted")
+
     def test_prejoin_has_no_false_capture_alarm_but_lost_capture_does(self):
         self.server.status()
         self.assertEqual(self.events.recent()[-1]["kind"], "capture_pending")
         self.assertEqual(self.events.recent()[-1]["level"], "info")
         self.server.cached_status = None
         self.bridge.call.return_value = dict(
-            capture=dict(age=1, audio=dict(running=True), screen=dict(running=True))
+            capture=dict(
+                age=1,
+                audio=dict(running=True, progress_age=0),
+                screen=dict(running=True, progress_age=0),
+            )
         )
         self.server.status()
         self.server.cached_status = None
@@ -240,6 +275,52 @@ class ConsoleHTTPTests(unittest.TestCase):
 
 
 class GuestControlTests(unittest.TestCase):
+    def test_status_ignores_malformed_archives_and_reports_active_admission(self):
+        import time
+
+        target = dict(display=":88", pid=1, start_ticks="fixture", auth="fixture")
+        with tempfile.TemporaryDirectory() as directory:
+            home = Path(directory)
+            bad = home / "rec/bad.archive"
+            bad.mkdir(parents=True)
+            (bad / "config.json").write_text("[]")
+            (bad / "health.json").write_text("null")
+            active = home / "rec/active.archive"
+            active.mkdir()
+            (active / "config.json").write_text(json.dumps(dict(display=":88", cdp="")))
+            (active / "health.json").write_text(
+                json.dumps(
+                    dict(
+                        utc=time.time(),
+                        started=time.time(),
+                        audio=dict(running=True, progress_age=0),
+                        screen=dict(running=True, progress_age=0),
+                    )
+                )
+            )
+            (active / "admission.json").write_text(
+                json.dumps(
+                    dict(
+                        utc=time.time(),
+                        stage="needs_operator",
+                        reason="google_join_refused",
+                        deadline=time.time() + 30,
+                        cookie="fixture-private-content",
+                    )
+                )
+            )
+            with (
+                patch("live_transcript.runtime.console.displays", return_value=[target]),
+                patch(
+                    "live_transcript.runtime.console.operator_control_active", return_value=False
+                ),
+                patch("live_transcript.core.config.get", return_value=str(home)),
+            ):
+                result = guest_action(dict(op="status", target=target))
+            self.assertEqual(result["admission"]["stage"], "needs_operator")
+            self.assertTrue(result["capture"]["audio"]["running"])
+            self.assertNotIn("fixture-private-content", json.dumps(result))
+
     def setUp(self):
         environment = patch.dict(os.environ)
         environment.start()

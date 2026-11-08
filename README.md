@@ -126,11 +126,14 @@ live-transcript start 'https://zoom.us/j/MEETING_ID' --passcode 'PASSCODE'
 
 Google Meet uses a headed browser controlled through loopback CDP, with a fresh
 private context by default. Guest access still depends on the host and Workspace
-policy. See [Google setup](docs/deployment.md#google-meet-browser).
+policy. Automatic guest admission remains experimental. Set `google.manual_join=true`
+to join through the [operator console](docs/deployment.md#google-meet-browser);
+the bot detects admission and starts captions automatically.
 
 The command deploys the current guest bundle automatically, joins the meeting,
 and follows its log. If the room has a waiting room, the host must admit the bot.
-Recording starts after confirmed admission. The display name comes from
+Meeting capture starts after confirmed admission. Google also keeps an independent
+audio/video archive of the join and recovery sequence before admission. The display name comes from
 `identity.name`; override it with `--name 'Meeting Transcript'` if needed.
 
 A Proton invitation's `#pwd-...` fragment is required. Keep real invitations and

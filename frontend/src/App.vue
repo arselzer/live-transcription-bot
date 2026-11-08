@@ -40,6 +40,22 @@ const viewerUrl = computed(
     }),
 );
 const capture = computed(() => state.value?.capture);
+const admission = computed(() => state.value?.admission);
+const admissionText = computed(() => {
+  if (!admission.value) return "";
+  if (admission.value.stage === "admitted") return "Admission confirmed";
+  if (admission.value.stage === "joining") return "Joining the meeting";
+  if (admission.value.stage === "needs_operator") {
+    const left = Math.max(
+      0,
+      Math.ceil((admission.value.deadline || 0) - now.value / 1000),
+    );
+    return left > 0
+      ? `Join through the console · ${left}s remaining`
+      : "Admission recovery window ended";
+  }
+  return "Admission was not confirmed";
+});
 const statusAge = computed(() =>
   Math.max(0, (now.value - lastStatusAt.value) / 1000),
 );
@@ -49,12 +65,16 @@ const fresh = computed(
 const speechFresh = computed(
   () => state.value?.speech && state.value.speech.age + statusAge.value < 20,
 );
-const recording = computed(
-  () =>
+function saving(component) {
+  const item = capture.value?.[component];
+  return (
     fresh.value &&
-    capture.value.audio?.running &&
-    capture.value.screen?.running,
-);
+    item?.running &&
+    Number.isFinite(item.progress_age) &&
+    item.progress_age + capture.value.age + statusAge.value < 20
+  );
+}
+const recording = computed(() => saving("audio") && saving("screen"));
 const elapsed = computed(() => {
   const seconds =
     (capture.value?.elapsed || 0) +
@@ -365,23 +385,39 @@ onUnmounted(() => {
             </h2>
             <span class="duration">{{ elapsed }}</span>
           </div>
+          <p
+            v-if="admissionText"
+            class="micro"
+            :class="{
+              warning:
+                admission?.stage === 'needs_operator' ||
+                admission?.stage === 'rejected',
+            }"
+            role="status"
+          >
+            {{ admissionText }}
+          </p>
+          <p v-if="admission && admission.stage !== 'admitted'" class="micro">
+            Join evidence is being saved. Meeting admission is still
+            unconfirmed.
+          </p>
           <div class="health-grid">
             <div>
               <span>Audio</span
-              ><strong :class="{ good: fresh && capture?.audio?.running }">{{
-                fresh && capture?.audio?.running ? "Saving" : "Unavailable"
+              ><strong :class="{ good: saving('audio') }">{{
+                saving("audio") ? "Saving" : "Unavailable"
               }}</strong>
             </div>
             <div>
               <span>Video</span
-              ><strong :class="{ good: fresh && capture?.screen?.running }">{{
-                fresh && capture?.screen?.running ? "Saving" : "Unavailable"
+              ><strong :class="{ good: saving('screen') }">{{
+                saving("screen") ? "Saving" : "Unavailable"
               }}</strong>
             </div>
             <div>
               <span>Snapshots</span
               ><strong>{{
-                fresh && capture?.snapshots?.running ? "Saving" : "Unavailable"
+                saving("snapshots") ? "Saving" : "Unavailable"
               }}</strong>
             </div>
             <div>

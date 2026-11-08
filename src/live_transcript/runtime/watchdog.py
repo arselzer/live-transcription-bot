@@ -23,6 +23,7 @@ from live_transcript.core.options import rejoin_options
 from live_transcript.capture.guard import atomic_json
 from live_transcript.runtime.state import update
 from live_transcript.core.config import get, ssh_options
+from live_transcript.providers.admission import REASONS as ADMISSION_REASONS
 
 VM = get("vm", "ssh")
 STATE = Path(get("paths", "logs")) / "watchdog-state.json"
@@ -274,11 +275,7 @@ def tick(state, dry_run=False):
     except (OSError, ValueError):
         return {"state-unreadable": "meeting bookkeeping unavailable; no automatic join attempted"}
     if meeting.get("status") not in ("active", "control_lost"):
-        if (
-            meeting.get("result")
-            in ("zoom_automation_blocked", "captcha_required", "host_denied", "meeting_locked")
-            and now - meeting.get("finished", 0) < 3600
-        ):
+        if meeting.get("result") in ADMISSION_REASONS and now - meeting.get("finished", 0) < 3600:
             return {
                 "admission-needs-operator": meeting["result"]
                 + "; no automatic rejoin, inspect scoped admission diagnostics"
@@ -350,6 +347,13 @@ def tick(state, dry_run=False):
                 "recovery unavailable or retry limit reached; source evidence retained"
             )
     if remote and remote.get("phase") == "running" and remote.get("archive"):
+        admission = remote.get("admission", {})
+        if admission.get("stage") == "needs_operator":
+            issues["admission-needs-operator"] = (
+                "Google admission needs manual control in the operator console: "
+                + str(admission.get("reason"))
+                + "; join evidence is being archived"
+            )
         ui = remote.get("ui_health", {})
         if ui.get("state") == "needs_operator" and now - ui.get("utc", 0) < 60:
             issues["ui-needs-operator"] = (
@@ -361,7 +365,10 @@ def tick(state, dry_run=False):
             issues["archive-degraded"] = (
                 "archival audio is stalled or its supervisor is unavailable"
             )
-        if max(remote.get("speaker_age", 0), remote.get("speaker_error_age", 0)) > 45:
+        if (
+            admission.get("stage") in (None, "admitted")
+            and max(remote.get("speaker_age", 0), remote.get("speaker_error_age", 0)) > 45
+        ):
             issues["speaker-evidence-stale"] = (
                 "speaker evidence stale; audio recording is left running"
             )

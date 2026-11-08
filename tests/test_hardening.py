@@ -23,6 +23,17 @@ import live_transcript.providers.proton as proton_meet
 
 
 class HardeningTests(unittest.TestCase):
+    def test_finished_google_refusal_is_visible_to_hermes_without_rejoining(self):
+        from live_transcript.runtime import watchdog
+
+        path = self.root / "meeting.json"
+        path.write_text(
+            json.dumps(dict(status="finished", result="google_join_refused", finished=time.time()))
+        )
+        with patch.object(watchdog, "MJSON", path), patch.object(watchdog, "probe") as probe:
+            self.assertIn("admission-needs-operator", watchdog.tick({}))
+        probe.assert_not_called()
+
     def test_safety_copy_preserves_disk_reserve_and_quota(self):
         gib = 1024**3
         self.assertTrue(capacity_available(0, 73 * gib, 24 * gib, 12 * gib))

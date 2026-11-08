@@ -50,6 +50,10 @@ session_seconds = 7200
 # Native X11 input requires xdotool+xclip in the dedicated browser VM.
 input_mode = "native"
 admission_timeout = 330.0
+# Leave joining to the operator console; recording starts as soon as admission is confirmed.
+manual_join = false
+# Keep the browser available after an automatic join error. Zero disables takeover.
+operator_recovery_seconds = 120.0
 # Disable only for native-media diagnostics; browser TTS and RTP counters need these hooks.
 browser_media_hooks = true
 

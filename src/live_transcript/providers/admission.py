@@ -3,6 +3,7 @@
 import fcntl
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 import time
@@ -11,6 +12,8 @@ from live_transcript.capture.guard import atomic_json
 from live_transcript.core.config import get
 
 REASONS = {
+    "google_ui_unavailable": re.compile(r"Google UI observation failed", re.I),
+    "google_navigation_failed": re.compile(r"Google navigation failed", re.I),
     "google_navigation_unexpected": re.compile(r"Google navigated outside Meet", re.I),
     "google_join_refused": re.compile(r"Google join RPC refused", re.I),
     "google_input_unavailable": re.compile(r"Google native input unavailable", re.I),
@@ -35,6 +38,31 @@ class AdmissionFailure(SystemExit):
     def __init__(self, reason):
         super().__init__(4)
         self.reason = reason
+
+
+def read_status(root):
+    """Read only the bounded admission fields used by the console/watchdog."""
+    try:
+        raw = json.loads((Path(root) / "admission.json").read_text())
+        if not isinstance(raw, dict) or raw.get("stage") not in (
+            "joining",
+            "needs_operator",
+            "admitted",
+            "rejected",
+        ):
+            return None
+        if raw.get("reason", "") not in (*REASONS, "", "manual_join"):
+            return None
+        keys = ("utc", "deadline") if raw["stage"] == "needs_operator" else ("utc",)
+        if any(
+            type(raw.get(key)) not in (int, float) or not math.isfinite(raw[key]) for key in keys
+        ):
+            return None
+        result = {key: raw[key] for key in keys}
+        result.update(stage=raw["stage"], reason=raw.get("reason", ""))
+        return result
+    except (OSError, ValueError, TypeError):
+        return None
 
 
 def block_reason(text):

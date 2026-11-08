@@ -175,6 +175,30 @@ including Unicode. A failed verification stops the join and retains diagnostics.
 `google.admission_timeout` defaults to 330 seconds and never extends the original
 meeting deadline. `doctor` reports missing native-input dependencies.
 
+Google's independent audio, full-desktop video, snapshots, and browser speaker
+observer start before browser navigation, so a failed join or manual takeover
+retains evidence. Live captions and the convenience WAV start after positive
+admission. Captions and speaker events use the archive's start clock; recovered
+audio includes the prejoin interval. Failure screenshots and state transitions
+are copied into the archive before finalization, including on failed admission.
+
+After an automatic join error, `google.operator_recovery_seconds` keeps the
+browser open for manual recovery (default 120 seconds; range 0–600). Open a
+console with `live-transcript console --control` and complete the join there.
+The console shows admission separately from capture health and counts down the
+recovery window. The existing Hermes watchdog reports when operator action is
+needed. The bot makes no join clicks, navigation, or identity changes in this
+window. An explicit host denial ends the attempt immediately; the original
+meeting deadline always caps recovery. Set the value to zero to finalize
+immediately on error.
+
+For meetings where unattended guest entry has not been validated, set
+`google.manual_join=true` before starting the session. The browser opens the room
+and waits up to `google.admission_timeout` for you to join through the console.
+It then starts captions automatically. The requested display name is not
+reported as a verified active identity after operator takeover. Browser state
+and recordings stay inside the VM and the configured private recording storage.
+
 Set `browser.google_private=false` to use the dedicated persistent
 `chrome-meet-prof` profile, for example when an approved signed-in identity is
 required. Use a dedicated, transparently named bot account. Provision sign-in
@@ -201,9 +225,10 @@ or that bot detection was its cause; these are distinct states.
 
 [Google's access documentation](https://support.google.com/meet/answer/9302870?hl=en)
 explains that Open, Trusted, Restricted and host-presence controls affect entry;
-Workspace policy can impose further limits. A denial is terminal and saves
-private screenshot/reason evidence. The application does not rename itself or
-repeatedly retry a rejected Google admission.
+Workspace policy can impose further limits. A denial ends automatic admission
+and saves private screenshot/reason evidence. Except for explicit host denial,
+the configured operator window remains available. The application does not
+rename itself or repeatedly retry a rejected Google admission.
 
 A successful manual guest join does not establish that unattended joining will
 work. Tests have observed automatic re-entry in an already-admitted browser,

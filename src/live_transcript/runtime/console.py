@@ -673,11 +673,14 @@ def guest_action(request):
             try:
                 config = json.loads((root / "config.json").read_text())
                 health = json.loads((root / "health.json").read_text())
+                if not isinstance(config, dict) or not isinstance(health, dict):
+                    continue
                 if config.get("display") != target["display"] or health.get("stopped"):
                     continue
                 if latest is None or health["utc"] > latest["utc"]:
                     latest = dict(
                         health,
+                        archive_root=root,
                         speaker_source="Speaker evidence: screen snapshots"
                         if not config.get("cdp")
                         else "Speaker evidence: browser + screen",
@@ -685,6 +688,7 @@ def guest_action(request):
             except (OSError, ValueError, KeyError, TypeError):
                 continue
         capture = None
+        admission = None
         if latest:
             capture = {
                 key: latest.get(key)
@@ -693,6 +697,9 @@ def guest_action(request):
             capture.update(
                 age=max(0, now - latest["utc"]), elapsed=max(0, now - latest.get("started", now))
             )
+            from live_transcript.providers.admission import read_status
+
+            admission = read_status(latest["archive_root"])
         speech = None
         try:
             gpu = Path(get("vm", "home")) / "gpu.json"
@@ -707,7 +714,13 @@ def guest_action(request):
                 )
         except (OSError, ValueError, TypeError):
             pass
-        return dict(display=target["display"], control=control, capture=capture, speech=speech)
+        return dict(
+            display=target["display"],
+            control=control,
+            capture=capture,
+            speech=speech,
+            admission=admission,
+        )
     if not control:
         raise ValueError("A live manual-control lease is required")
     if op == "key" and request.get("key") in ("Escape", "Tab", "ctrl+l"):

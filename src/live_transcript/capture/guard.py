@@ -34,7 +34,8 @@ def seal(root):
     for path in Path(root).iterdir():
         if (
             path.suffix not in (".flac", ".mkv", ".jpg", ".csv", ".jsonl", ".wav", ".txt")
-            and path.name not in ("config.json", "observer-health.json", "ui-health.json")
+            and path.name
+            not in ("config.json", "observer-health.json", "ui-health.json", "admission.json")
         ) or not path.is_file():
             continue
         digest = hashlib.sha256()
@@ -118,10 +119,12 @@ def commands(
             "x11grab",
             "-framerate",
             "5",
-            "-video_size",
-            "1280x800",
             "-i",
             display,
+            # x11grab defaults to the entire desktop. Padding, rather than
+            # cropping, also lets yuv420p preserve odd-sized desktop edges.
+            "-vf",
+            "pad=ceil(iw/2)*2:ceil(ih/2)*2",
             "-c:v",
             "libx264",
             "-preset",
@@ -147,8 +150,6 @@ def commands(
         "x11grab",
         "-framerate",
         "5",
-        "-video_size",
-        "1280x800",
         "-i",
         display,
         "-vf",
