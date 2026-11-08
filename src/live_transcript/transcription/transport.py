@@ -298,11 +298,33 @@ def upload_ready(uploader):
             following = directory / f"capchunk_{seq + 1:05d}.wav"
             if not current.exists() or not (following.exists() or source["closed"]):
                 break
-            data = current.read_bytes()
-            with wave.open(io.BytesIO(data)) as wav:
-                pcm = wav.readframes(wav.getnframes())
-            if not pcm:
-                raise ValueError(f"empty capture retained for inspection: {current}")
+            try:
+                data = current.read_bytes()
+                with wave.open(io.BytesIO(data)) as wav:
+                    if (wav.getnchannels(), wav.getsampwidth(), wav.getframerate()) != (
+                        1,
+                        2,
+                        16000,
+                    ):
+                        raise ValueError("unexpected capture format")
+                    pcm = wav.readframes(wav.getnframes())
+                if not pcm or len(pcm) % 2:
+                    raise ValueError("empty or incomplete capture")
+            except (OSError, EOFError, wave.Error, ValueError) as exc:
+                # A bad final packet from an interrupted generation must not
+                # starve newer capture generations. Keep its bytes, sequence and
+                # timestamp intact so repair can retry without guessing duration.
+                failure = dict(seq=seq, file=current.name, error=type(exc).__name__)
+                if source.get("read_error") != failure:
+                    with SOURCE_LOCK:
+                        source["read_error"] = failure
+                        save_source(source)
+                    print(
+                        "[upload] damaged capture retained; other generations continue:",
+                        json.dumps(failure),
+                        flush=True,
+                    )
+                break
             # Metadata is saved BEFORE send. A lost ACK/restart reuses the same ID.
             sidecar = current.with_suffix(".json")
             if sidecar.exists():
@@ -320,6 +342,7 @@ def upload_ready(uploader):
                 atomic_write(sidecar, json.dumps(meta, ensure_ascii=False), durable=True)
             uploader.send(meta, data)
             with SOURCE_LOCK:
+                source.pop("read_error", None)
                 source["next_seq"] += 1
                 source["sent_samples"] += len(pcm) // 2
                 save_source(source)

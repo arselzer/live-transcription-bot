@@ -92,6 +92,13 @@ Finalization writes inventory hashes before the completion marker. Mutable WAV
 headers require checksum copies, not append-only replication. A source is retained
 even after verified retrieval; deletion is an operator retention decision.
 
+The live uploader isolates unreadable audio packets by capture generation. A
+damaged final WAV after a streamer interruption stays on disk with a `read_error`
+in its source manifest; it does not block newer generations. Its sequence number
+and timestamp remain unchanged for a later repair attempt. Later packets in the
+same damaged generation remain pending too, rather than guessing the duration
+of missing audio. The independent lossless archive remains the recovery source.
+
 ## Maintaining provider adapters
 
 The Zoom adapter still contains legacy procedural join/chat/camera logic. This
