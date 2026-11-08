@@ -497,7 +497,9 @@ class Handler(BaseHTTPRequestHandler):
         return self.headers.get("Host") == self.server.authority
 
     def same_origin(self):
-        return self.headers.get("Origin") == "http://" + self.server.authority
+        return self.headers.get("Origin") == getattr(
+            self.server, "external_origin", "http://" + self.server.authority
+        )
 
     def body(self):
         if self.headers.get("Transfer-Encoding"):
@@ -527,9 +529,15 @@ class Handler(BaseHTTPRequestHandler):
                 response = json.dumps(self.server.session()).encode()
                 self.send_response(200)
                 self.headers_safe()
+                secure = (
+                    "; Secure"
+                    if getattr(self.server, "external_origin", "").startswith("https://")
+                    else ""
+                )
                 self.send_header(
                     "Set-Cookie",
-                    f"{self.server.cookie_name}={self.server.auth.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={self.server.auth.session_seconds}",
+                    f"{self.server.cookie_name}={self.server.auth.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={self.server.auth.session_seconds}"
+                    + secure,
                 )
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))
@@ -796,6 +804,7 @@ class ConsoleHub(ThreadingHTTPServer):
         ]
         self.auth, self.token, self.cookie_name = auth, auth.token, auth.cookie_name
         self.advertised_host = advertised_host
+        self.media_slots = threading.BoundedSemaphore(4)
         self.monitor_stop = threading.Event()
         super().__init__(address, HubHandler)
         self.authority = f"{advertised_host}:{self.server_port}"
@@ -813,7 +822,8 @@ class HubHandler(Handler):
         path = urlsplit(self.path).path
         match = re.fullmatch(r"/vm/([a-z][a-z0-9-]{0,39})(/.*)", path)
         if match and match[1] in self.server.targets:
-            return self.server.targets[match[1]], match[2]
+            query = urlsplit(self.path).query
+            return self.server.targets[match[1]], match[2] + ("?" + query if query else "")
         return None
 
     def do_GET(self):
@@ -842,18 +852,45 @@ class HubHandler(Handler):
             return self.reply(404, dict(error="Unknown VM"))
         port, path = target
         socket_request = self.headers.get("Upgrade", "").lower() == "websocket"
-        allowed = (
-            path in ("/api/session", "/api/status", "/api/events", "/api/meeting", "/api/audio")
-            or path.startswith("/novnc/")
-            if method == "GET"
-            else path in ("/api/action", "/api/interaction")
+        route = urlsplit(path).path
+        artifact = re.fullmatch(
+            r"/api/recordings/[a-f0-9]{32}/(?:audio|video|screen|text|subtitles|notes)", route
         )
-        if not allowed or any(value in path for value in ("..", "%", "\\")):
+        allowed = (
+            route
+            in (
+                "/api/session",
+                "/api/status",
+                "/api/events",
+                "/api/meeting",
+                "/api/audio",
+                "/api/jobs",
+                "/api/recordings",
+            )
+            or bool(re.fullmatch(r"/api/recordings/[a-f0-9]{32}", route))
+            or bool(artifact)
+            or route.startswith("/novnc/")
+            if method == "GET"
+            else route
+            in (
+                "/api/action",
+                "/api/interaction",
+                "/api/control",
+                "/api/meeting/start",
+                "/api/meeting/stop",
+                "/api/jobs/cancel",
+            )
+        )
+        if not allowed or any(value in route for value in ("..", "%", "\\")):
             return self.reply(404, dict(error="Unknown console endpoint"))
         cookie = SimpleCookie(self.headers.get("Cookie", ""))
         headers = dict(Cookie=f"{self.server.cookie_name}={cookie[self.server.cookie_name].value}")
         authority = f"{self.server.advertised_host}:{port}"
         headers["Origin"] = "http://" + authority
+        if artifact:
+            for name in ("Range", "If-Range"):
+                if self.headers.get(name):
+                    headers[name] = self.headers[name]
         if socket_request:
             if path != "/novnc/websockify" or not self.same_origin():
                 return self.reply(403, dict(error="Invalid WebSocket origin"))
@@ -889,8 +926,38 @@ class HubHandler(Handler):
                 except (OSError, http.client.HTTPException):
                     pass
                 return
-            body = response.read(4 * 1024 * 1024 + 1)
-            if len(body) > 4 * 1024 * 1024:
+            if artifact and response.status in (200, 206, 416):
+                if not self.server.media_slots.acquire(blocking=False):
+                    return self.reply(429, dict(error="Too many playback streams"))
+                try:
+                    self.close_connection = True
+                    self.send_response(response.status)
+                    self.headers_safe()
+                    for name in (
+                        "Content-Type",
+                        "Content-Length",
+                        "Content-Range",
+                        "Accept-Ranges",
+                        "ETag",
+                    ):
+                        value = response.getheader(name)
+                        if value is not None:
+                            self.send_header(name, value)
+                    self.end_headers()
+                    try:
+                        while not self.server.monitor_stop.is_set() and self.authenticated():
+                            block = response.read1(65536)
+                            if not block:
+                                break
+                            self.wfile.write(block)
+                    except (OSError, http.client.HTTPException):
+                        pass
+                finally:
+                    self.server.media_slots.release()
+                return
+            limit = 8 * 1024 * 1024 if route.startswith("/api/recordings") else 4 * 1024 * 1024
+            body = response.read(limit + 1)
+            if len(body) > limit:
                 raise ValueError("Oversized console response")
             if response.status == 401:
                 return self.reply(

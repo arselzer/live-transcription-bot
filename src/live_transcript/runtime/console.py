@@ -722,6 +722,8 @@ def guest_action(request):
     from live_transcript.core.config import get
 
     candidates = displays()
+    if request.get("op") == "inventory":
+        return dict(displays=candidates, free_bytes=shutil.disk_usage(get("vm", "home")).free)
     if request.get("op") == "discover":
         selected = [item for item in candidates if item["display"] == request.get("display")]
         if len(selected) != 1:

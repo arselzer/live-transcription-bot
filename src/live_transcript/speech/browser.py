@@ -8,18 +8,42 @@ import base64
 MIC_SCRIPT = r"""(() => {
   if (window.__liveTranscriptVoice) return;
   const native = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
-  let context, destination, silence;
-  const ready = () => {
-    if (!context) {
+  let context, destination, silence, setup;
+  const ready = async () => {
+    if (!setup) setup = (async () => {
       context = new AudioContext({sampleRate:48000});
+      // This graph supplies WebRTC's microphone clock, not a speaker. Keeping
+      // it independent of the hardware output avoids losing its clock when
+      // PulseAudio restarts. Older engines retain the existing fallback.
+      if (typeof context.setSinkId === 'function') {
+        try { await context.setSinkId({type:'none'}); } catch (_) {}
+      }
       destination = context.createMediaStreamDestination();
       silence = context.createConstantSource(); silence.offset.value = 0;
       silence.connect(destination); silence.start();
-    }
+    })();
+    await setup;
     return context.resume();
   };
   const api = window.__liveTranscriptVoice = {
-    requests: [], tracks: [],
+    requests: [], tracks: [], outputs: new Map(),
+    async recoverOutput() {
+      if(context && context.state!=='closed') await context.resume();
+      let reset=0;
+      for(const [element,stream] of this.outputs) {
+        if(!element.isConnected || element.srcObject!==stream) {this.outputs.delete(element);continue;}
+        if(!stream.getAudioTracks().some(t=>t.readyState==='live'))continue;
+        // Chromium may pause an active remote MediaStream when its audio
+        // server disappears. Reattach the same stream; never change mute,
+        // volume, track.enabled, the meeting microphone, or call admission.
+        element.srcObject=null; element.srcObject=stream;
+        try {await element.play();reset++;}catch(_){}
+      }
+      return {reset,clock:context?.state||'unused'};
+    },
+    health() { return {state:context?.state||'unused', time:context?.currentTime||0,
+      independentClock:context?.sinkId?.type==='none',
+      live:this.tracks.filter(t=>t.readyState==='live').length}; },
     async play(encoded, monitor=false) {
       await ready();
       const raw = atob(encoded), bytes = new Uint8Array(raw.length);
@@ -27,14 +51,31 @@ MIC_SCRIPT = r"""(() => {
       const buffer = await context.decodeAudioData(bytes.buffer);
       const source = context.createBufferSource(); source.buffer = buffer;
       source.connect(destination);
-      if (monitor) source.connect(context.destination);
+      let monitorContext, monitorSource;
+      if (monitor) {
+        monitorContext = new AudioContext({sampleRate:48000});
+        await monitorContext.resume();
+        monitorSource = monitorContext.createBufferSource(); monitorSource.buffer=buffer;
+        monitorSource.connect(monitorContext.destination);
+      }
       const started = Date.now()/1000;
       return await new Promise(resolve => {
-        source.onended=()=>{source.disconnect();resolve({started,duration:buffer.duration,ended:Date.now()/1000});};
-        source.start();
+        source.onended=()=>{source.disconnect();
+          if(monitorSource){try{monitorSource.stop();}catch(_){}monitorSource.disconnect();monitorContext.close().catch(()=>{});}
+          resolve({started,duration:buffer.duration,ended:Date.now()/1000});};
+        source.start(); if(monitorSource)monitorSource.start();
       });
     }
   };
+  const remember = element => {
+    const stream=element?.srcObject;
+    if(stream && typeof stream.getAudioTracks==='function' && stream.getAudioTracks().length) {
+      api.outputs.set(element,stream);
+      for(const node of api.outputs.keys()) if(!node.isConnected) api.outputs.delete(node);
+      if(api.outputs.size>32)api.outputs.delete(api.outputs.keys().next().value);
+    }
+  };
+  document.addEventListener('playing',event=>remember(event.target),true);
   navigator.mediaDevices.getUserMedia = async options => {
     const stream = await native(options);
     if (options && options.audio) {
@@ -89,3 +130,20 @@ def play_wav(page, wav, monitor=False):
     result["microphone_requests"] = channel["requests"]
     result["live_microphone_tracks"] = channel["live"]
     return result
+
+
+def recover_output(page):
+    """Reattach previously playing remote streams, without changing mute state."""
+    reset = 0
+    for frame in getattr(page, "frames", [page])[:8]:
+        try:
+            result = frame.evaluate("""async () => {
+              const api=window.__liveTranscriptVoice;
+              if(!api?.recoverOutput)return null;
+              return await Promise.race([api.recoverOutput(),new Promise(resolve=>setTimeout(()=>resolve(null),1500))]);
+            }""")
+            if isinstance(result, dict) and type(result.get("reset")) is int:
+                reset += max(0, min(32, result["reset"]))
+        except Exception:
+            continue
+    return reset

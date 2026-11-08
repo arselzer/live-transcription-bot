@@ -14,7 +14,8 @@ meeting links, identities, paths, or messaging credentials.
 
 1. Run `live-transcript --config PROFILE --json info` and confirm the intended
    package, interpreter, profile, data root, and VM name.
-2. Run `check` and `--json status` with that profile. For an intentionally
+2. Run `capacity --max-min N` and inspect storage/memory headroom. Low capacity
+   blocks new starts; preserve existing capture. Run `check` and `--json status` with that profile. For an intentionally
    recording-only installation use `check --recording-only`.
 3. Preserve the complete invitation, including Zoom's password query or Proton's
    encryption fragment. Keep it out of public output and shell history.
@@ -37,6 +38,14 @@ meeting links, identities, paths, or messaging credentials.
   Only the user's explicitly configured bounded Zoom name fallback is eligible.
 
 ## Console and recovery
+
+For a persistent page, run `workspace` separately (or use the Compose workspace
+service). Share its authenticated private URL in the authorized conversation.
+It remains available between meetings and includes recordings, capacity, jobs,
+and exact-session stop. A queued start is not admission; requests have fixed
+expiry times. An unavailable application controller does not prove VM capture
+has stopped. Cancel only explicitly requested final-processing jobs, never
+recording or evidence-copy workers.
 
 Once a meeting display exists, run `live-transcript --json console`. Supervise it
 separately. Its URL opens the live transcript workspace; use **VM console** for

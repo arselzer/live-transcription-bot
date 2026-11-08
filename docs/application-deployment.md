@@ -2,7 +2,7 @@
 
 The application image contains the CLI, workspace/API, SSH and retrieval tools,
 FFmpeg/fonts and the pinned CPU whisper.cpp binary used for final processing.
-Caption ingest and the two live speech workers run as separate services. The
+Caption ingest, the persistent workspace and the two live speech workers run as separate services. The
 browser and independent audio/video recorder always run in a VM.
 
 On an x86-64 Linux host with Docker Engine, Compose v2 and working `/dev/kvm`,
@@ -12,6 +12,75 @@ setup needs internet access for the verified Ubuntu image, packages and models.
 Allow at least 24 GiB RAM and local space for the VM, models and recordings.
 Docker Desktop, rootless Docker, non-x86 hosts and SELinux volume labels need
 separate validation. The guest uses systemd; the application containers do not.
+
+## Use the deployment wrapper
+
+From a cloned checkout:
+
+```bash
+./deploy.sh init /path/to/deployment
+./deploy.sh up /path/to/deployment
+./deploy.sh check /path/to/deployment
+./deploy.sh workspace /path/to/deployment
+./deploy.sh status /path/to/deployment
+```
+
+`init` accepts the resource, port, speech and workspace options below. Runtime
+storage stays beneath its deployment directory; use the low-level export for
+custom mount layouts. For example, use
+`--workspace-listen 0.0.0.0 --workspace-host console.example --workspace-port 6080`
+for a trusted VPN. For an existing TLS reverse proxy, add
+`--workspace-url https://console.example`. Preserve its public Host and Origin
+headers and forward WebSocket upgrades; the workspace checks that explicit
+origin and issues Secure cookies. The proxy supplies TLS, not the VM service.
+The wrapper selects the build UID/GID automatically. A copied `manage`
+script and cached helper-image reference remain in the deployment directory for
+routine operation without the checkout. Updating from source uses `deploy.sh`
+from the newer checkout.
+
+The wrapper needs Bash, Git for the initial build/update, and Docker with Compose.
+It can use passwordless sudo for Docker when direct access is unavailable. Run
+it as the ordinary data owner. A container-held file lock serializes deployment
+mutations and releases when the wrapper's stdin closes, including after failure.
+
+`up` checks available host memory and VM backing storage, builds missing images,
+and waits for service readiness. It reuses existing VM images and disks.
+Startup memory estimates and recording headroom are configurable under
+`[capacity]`; measured available memory is not a reservation against other
+workloads starting later.
+
+To stop the whole installation, finish the meeting and verify retrieval, then
+run `./deploy.sh down DIRECTORY`. The wrapper holds the host launch lock and checks both host bookkeeping and
+guest recording ownership. Active or uncheckable guest capture blocks shutdown.
+Use the workspace's **Stop recording** control for an individual meeting.
+
+## Update and roll back the application
+
+```bash
+# From the newer committed checkout:
+./deploy.sh update /path/to/deployment
+# Restore the compatible previous application release:
+./deploy.sh rollback /path/to/deployment
+```
+
+An update verifies its owned code artifacts, journals the pending release and
+retains the previous build inputs/configuration and versioned local image tags.
+It builds and replaces only `app`, `captions` and `workspace`, using `--no-deps`.
+The VM and speech workers keep running. Caption transport retains its own retry
+queue during the caption-service handover. The workspace login remains stable;
+its viewer can reconnect afterward.
+
+A failed build or activation restores the previous application files and tries
+to reactivate that release. If interrupted, a pending receipt remains: use
+`rollback` before another update or ordinary startup. Rollback refuses an
+incompatible state schema. Guest disks, recording files and journals are retained.
+Application rollback is not a backup or a guest-OS downgrade.
+
+Configuration tuning is preserved. Edited generated code or changed service
+identities require explicit maintenance instead of automatic replacement.
+Keep the retained local images and `.releases` directory if rollback is needed.
+The wrapper does not prune Docker images. Guest OS/browser maintenance is a
+separate idle-VM operation; application update does not reboot or reprovision it.
 
 ## Build without installing Python on the host
 
@@ -123,8 +192,11 @@ docker compose -f compose.json exec -T app live-transcript --json console \
 docker compose -f compose.json exec -T app live-transcript stop
 ```
 
-Open the private console URL for the light-themed transcript workspace and VM
-controls. With host networking, `6080` is a host port; adding a Compose `ports`
+The separate `workspace` service is available before and after meetings. Use
+`./deploy.sh workspace DIRECTORY` for its stable login link and
+[meeting controls and recording library](workspace.md). The `console` command
+still opens a bounded viewer for an existing display. Open its private URL for
+transcript and VM controls. With host networking, `6080` is a host port; adding a Compose `ports`
 entry does not publish or restrict it. Use loopback by default or a trusted VPN,
 and terminate TLS upstream for untrusted networks.
 The console still needs an existing meeting display; `console --idle --control`
@@ -167,7 +239,8 @@ or `down` requests guest ACPI shutdown and allows up to 120 seconds for guest
 services to finish before terminating QEMU. Stop the meeting and verify retrieval
 before intentionally stopping the whole stack. After a guest reboot, `start`
 prepares its audio topology under the idle lease before launching the browser;
-a read-only preflight can report that sink as unavailable until preparation. Never restart or stop the VM as a response to a caption,
+the persistent PulseAudio device script recreates its sink and microphone on
+subsequent audio-server/guest restarts. Never restart or stop the VM as a response to a caption,
 summary, application, or UI failure.
 
 ## Hermes

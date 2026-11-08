@@ -1,7 +1,88 @@
 <script setup>
 import { computed, ref, onMounted, onUnmounted } from "vue";
 import MeetingTranscript from "./MeetingTranscript.vue";
-const audio = ref(null), listening = ref(false), audioError = ref("");
+import RecordingLibrary from "./RecordingLibrary.vue";
+const persistent = ref(false),
+  release = ref(""),
+  manualControl = ref(false),
+  workspaceControl = ref(false);
+const invitation = ref(""),
+  duration = ref(90),
+  meetingBusy = ref(false),
+  stopPending = ref(false),
+  jobs = ref([]);
+let workspaceGeneration = null;
+const run = computed(() => state.value?.workspace?.run || {});
+const activeRun = computed(
+  () =>
+    ["active", "control_lost"].includes(run.value.status) && run.value.run_id,
+);
+async function takeControl() {
+  const enabled = !manualControl.value;
+  try {
+    await api("control", {
+      enabled,
+      target_generation: state.value?.workspace?.target_generation,
+    });
+    manualControl.value = enabled;
+    if (enabled) tab.value = "console";
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+async function startMeeting() {
+  if (meetingBusy.value) return;
+  meetingBusy.value = true;
+  error.value = "";
+  const bytes = new Uint8Array(16);
+  crypto.getRandomValues(bytes);
+  const request_id = Array.from(bytes, (x) =>
+    x.toString(16).padStart(2, "0"),
+  ).join("");
+  try {
+    await api("meeting/start", {
+      url: invitation.value,
+      minutes: Number(duration.value),
+      request_id,
+    });
+    invitation.value = "";
+    notice.value = "Meeting start queued.";
+    await refresh();
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    meetingBusy.value = false;
+  }
+}
+async function stopMeeting() {
+  if (!stopPending.value) {
+    stopPending.value = true;
+    return;
+  }
+  const run_id = run.value.run_id;
+  meetingBusy.value = true;
+  try {
+    await api("meeting/stop", { run_id });
+    notice.value =
+      "Meeting stop requested. Retrieval and processing continue independently.";
+  } catch (e) {
+    error.value = e.message;
+  } finally {
+    meetingBusy.value = false;
+    stopPending.value = false;
+  }
+}
+async function cancelJob(id) {
+  try {
+    await api("jobs/cancel", { id });
+    notice.value = "Processing cancellation requested; originals are retained.";
+  } catch (e) {
+    error.value = e.message;
+  }
+}
+const audio = ref(null),
+  listening = ref(false),
+  audioError = ref("");
 let audioAttempt = 0;
 function stopListening() {
   audioAttempt++;
@@ -13,16 +94,21 @@ function stopListening() {
   }
 }
 async function listen() {
-  if (listening.value) { stopListening(); return; }
+  if (listening.value) {
+    stopListening();
+    return;
+  }
   const attempt = ++audioAttempt;
   audioError.value = "";
   listening.value = true;
   audio.value.src = apiBase.value + "/api/audio";
-  try { await audio.value.play(); }
-  catch (_) {
+  try {
+    await audio.value.play();
+  } catch (_) {
     if (attempt === audioAttempt) {
       stopListening();
-      audioError.value = "Audio playback is unavailable. Recording is independent.";
+      audioError.value =
+        "Audio playback is unavailable. Recording is independent.";
     }
   }
 }
@@ -203,6 +289,31 @@ async function refresh() {
       .then((value) => {
         if (!current()) return false;
         state.value = value;
+        if (value.workspace) {
+          persistent.value = true;
+          workspaceControl.value = value.workspace.control_enabled;
+          if (manualControl.value && !value.workspace.control_lease_active)
+            manualControl.value = false;
+          const next = `${base}:${value.workspace.generation}`;
+          if (workspaceGeneration !== next) {
+            stopListening();
+            workspaceGeneration = next;
+            password.value = value.workspace.viewer_password || "";
+            generation.value++;
+          }
+          if (manualControl.value && document.visibilityState === "visible")
+            api("control", {
+              enabled: true,
+              target_generation: value.workspace.target_generation,
+            }).catch(() => {
+              manualControl.value = false;
+            });
+          else if (manualControl.value) {
+            manualControl.value = false;
+            api("control", { enabled: false }).catch(() => {});
+          }
+        }
+
         lastStatusAt.value = Date.now();
         now.value = Date.now();
         statusError.value = "";
@@ -244,7 +355,14 @@ async function refresh() {
       .catch((e) => {
         if (current()) meetingError.value = e.message;
       });
-    await Promise.allSettled([status, activity, captions]);
+    const work = persistent.value
+      ? api("jobs", undefined, true, base)
+          .then((value) => {
+            if (current()) jobs.value = value.jobs || [];
+          })
+          .catch(() => {})
+      : Promise.resolve();
+    await Promise.allSettled([status, activity, captions, work]);
   } finally {
     if (refreshing === request) refreshing = null;
   }
@@ -309,6 +427,14 @@ function attachViewer() {
 }
 async function selectConsole(id) {
   if (busy.value || !consoles.value.some((item) => item.id === id)) return;
+  if (manualControl.value) {
+    await api("control", { enabled: false }).catch(() => {});
+    manualControl.value = false;
+  }
+  persistent.value = false;
+  workspaceGeneration = null;
+  jobs.value = [];
+  stopPending.value = false;
   selected.value = id;
   meeting.value = null;
   meetingError.value = "";
@@ -343,6 +469,9 @@ async function reconnect() {
     if (base !== apiBase.value || attempt !== connectionAttempt) return;
     if (!session.authenticated)
       throw new Error("Open a private console login link first.");
+    persistent.value = !!session.persistent;
+    release.value = session.release || "";
+    workspaceControl.value = !!session.control_enabled;
     password.value = session.viewer_password || "";
     generation.value++;
     vmReady.value = true;
@@ -423,6 +552,14 @@ onMounted(async () => {
   timer = setInterval(refresh, 4000);
 });
 onUnmounted(() => {
+  if (manualControl.value)
+    fetch(apiBase.value + "/api/control", {
+      method: "POST",
+      credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled: false }),
+      keepalive: true,
+    }).catch(() => {});
   stopListening();
   viewerObserver?.disconnect();
   clearInterval(timer);
@@ -456,7 +593,7 @@ onUnmounted(() => {
         >
       </div>
     </header>
-    <main>
+    <main :class="{ reviewing: tab === 'library' }">
       <section class="workspace">
         <div class="section-heading">
           <div>
@@ -485,6 +622,80 @@ onUnmounted(() => {
             Retry
           </button>
         </div>
+        <form
+          v-if="persistent && workspaceControl"
+          class="meeting-controls"
+          @submit.prevent="startMeeting"
+        >
+          <label class="meeting-link"
+            ><span>Meeting invitation</span
+            ><input
+              type="url"
+              v-model="invitation"
+              maxlength="4096"
+              placeholder="Paste a meeting link"
+              required
+              :disabled="!!activeRun || meetingBusy"
+          /></label>
+          <label class="meeting-duration"
+            ><span>Minutes</span
+            ><input
+              type="number"
+              v-model="duration"
+              min="1"
+              max="1440"
+              required
+              :disabled="!!activeRun || meetingBusy"
+          /></label>
+          <button
+            v-if="!activeRun"
+            type="submit"
+            :disabled="
+              meetingBusy ||
+              !authenticated ||
+              !invitation ||
+              state?.workspace?.unreachable ||
+              !!state?.display ||
+              state?.capacity?.status === 'blocked'
+            "
+          >
+            {{ meetingBusy ? "Queuing…" : "Join and record" }}
+          </button>
+          <button
+            v-else
+            type="button"
+            @click="stopMeeting"
+            :disabled="meetingBusy"
+            :class="{ danger: stopPending }"
+          >
+            {{ stopPending ? "Confirm stop" : "Stop recording" }}
+          </button>
+          <button v-if="stopPending" type="button" @click="stopPending = false">
+            Keep recording
+          </button>
+        </form>
+        <p
+          v-if="persistent && notice && tab !== 'console'"
+          class="success-note"
+          role="status"
+        >
+          {{ notice }}
+        </p>
+        <p
+          v-if="persistent && state?.workspace?.unreachable"
+          class="banner recovery"
+          role="status"
+        >
+          VM status is unavailable. A recording may still be running.
+        </p>
+        <p
+          v-if="persistent && state?.workspace?.application_ready === false"
+          class="banner recovery"
+          role="status"
+        >
+          Application control is unavailable. Queued requests wait for recovery;
+          existing VM capture may continue.
+        </p>
         <nav class="workspace-tabs" aria-label="Meeting views">
           <button
             :aria-pressed="tab === 'transcript'"
@@ -497,6 +708,16 @@ onUnmounted(() => {
             <span v-if="admission?.stage === 'needs_operator'" class="warning"
               >· Needs you</span
             >
+          </button>
+          <button
+            v-if="persistent"
+            :aria-pressed="tab === 'library'"
+            @click="
+              tab = 'library';
+              stopListening();
+            "
+          >
+            Recordings
           </button>
         </nav>
         <div
@@ -514,6 +735,13 @@ onUnmounted(() => {
           >
           <button @click="tab = 'console'">Open console</button>
         </div>
+        <RecordingLibrary
+          v-if="persistent"
+          v-show="tab === 'library'"
+          :base="apiBase"
+          :active="tab === 'library'"
+          @playback="stopListening"
+        />
         <MeetingTranscript
           v-show="tab === 'transcript'"
           :active="tab === 'transcript'"
@@ -524,7 +752,11 @@ onUnmounted(() => {
         <div v-show="tab === 'console'">
           <div class="viewer-frame">
             <iframe
-              v-if="authenticated && vmReady"
+              v-if="
+                authenticated &&
+                vmReady &&
+                (!persistent || state?.workspace?.viewer_ready)
+              "
               :key="generation"
               ref="viewer"
               :src="viewerUrl"
@@ -533,8 +765,14 @@ onUnmounted(() => {
               @load="attachViewer"
             />
             <div v-else class="empty">
-              <h2>Connecting…</h2>
-              <p>Use the full console link to connect.</p>
+              <h2>{{ persistent ? "No viewer connected" : "Connecting…" }}</h2>
+              <p>
+                {{
+                  persistent
+                    ? "The viewer opens when the meeting browser is available."
+                    : "Use the full console link to connect."
+                }}
+              </p>
             </div>
           </div>
           <div class="viewer-toolbar">
@@ -548,6 +786,13 @@ onUnmounted(() => {
               ></span
             >
             <div>
+              <button
+                v-if="persistent && workspaceControl"
+                @click="takeControl"
+                :disabled="!state?.workspace?.viewer_ready"
+              >
+                {{ manualControl ? "Release control" : "Take control" }}
+              </button>
               <button @click="reconnect" :disabled="!authenticated">
                 Reconnect</button
               ><button @click="fullscreen" :disabled="!authenticated">
@@ -560,20 +805,31 @@ onUnmounted(() => {
           </p>
         </div>
       </section>
-      <aside>
-        <section class="panel audio-panel">
+      <aside v-show="tab !== 'library'">
+        <section v-show="tab !== 'library'" class="panel audio-panel">
           <div class="panel-title">
             <h2>Meeting audio</h2>
             <button :disabled="!authenticated || !vmReady" @click="listen">
               {{ listening ? "Stop listening" : "Listen" }}
             </button>
           </div>
-          <p class="micro">Listen to the selected VM. Your microphone stays off.</p>
-          <audio ref="audio" v-show="listening" controls preload="none"
-            controlslist="nodownload noplaybackrate" aria-label="Meeting audio playback"
-            @error="audioFailed" @ended="stopListening"
-            @pause="listening && stopListening()" />
-          <p v-if="audioError" role="status" class="micro warning">{{ audioError }}</p>
+          <p class="micro">
+            Listen to the selected VM. Your microphone stays off.
+          </p>
+          <audio
+            ref="audio"
+            v-show="listening"
+            controls
+            preload="none"
+            controlslist="nodownload noplaybackrate"
+            aria-label="Meeting audio playback"
+            @error="audioFailed"
+            @ended="stopListening"
+            @pause="listening && stopListening()"
+          />
+          <p v-if="audioError" role="status" class="micro warning">
+            {{ audioError }}
+          </p>
         </section>
         <section v-show="tab === 'console'" class="panel paste-panel">
           <div class="panel-title">
@@ -722,6 +978,84 @@ onUnmounted(() => {
             </button>
           </div>
         </section>
+        <section v-if="state?.capacity" class="panel capacity-panel">
+          <div class="panel-title">
+            <h2>Recording capacity</h2>
+            <span :class="{ warning: state.capacity.status !== 'ready' }">{{
+              state.capacity.status
+            }}</span>
+          </div>
+          <p class="micro">
+            About
+            {{ Math.floor(state.capacity.estimated_minutes_remaining) }} minutes
+            available at the configured recording estimate.
+          </p>
+          <div class="health-grid">
+            <div>
+              <span>Application storage</span
+              ><strong
+                >{{
+                  (state.capacity.host_free_bytes / 1024 ** 3).toFixed(1)
+                }}
+                GiB</strong
+              >
+            </div>
+            <div>
+              <span>VM disk storage</span
+              ><strong>{{
+                state.capacity.vm_host_free_bytes === null
+                  ? "Unknown"
+                  : (state.capacity.vm_host_free_bytes / 1024 ** 3).toFixed(1) +
+                    " GiB"
+              }}</strong>
+            </div>
+          </div>
+          <p
+            v-for="message in [
+              ...state.capacity.reasons,
+              ...state.capacity.warnings,
+            ]"
+            :key="message"
+            class="micro warning"
+          >
+            {{ message }}
+          </p>
+        </section>
+        <section
+          v-if="
+            persistent &&
+            jobs.some(
+              (job) =>
+                ['running', 'starting', 'queued'].includes(job.status) &&
+                !['watchdog', 'calendar'].includes(job.kind),
+            )
+          "
+          class="panel"
+        >
+          <div class="panel-title"><h2>Background work</h2></div>
+          <div
+            v-for="job in jobs
+              .filter(
+                (job) =>
+                  ['running', 'starting', 'queued'].includes(job.status) &&
+                  !['watchdog', 'calendar'].includes(job.kind),
+              )
+              .slice(0, 6)"
+            :key="job.id"
+            class="job-row"
+          >
+            <span
+              >{{ job.kind }} ·
+              {{ job.cancel_requested ? "Cancelling" : job.status }}</span
+            ><button
+              v-if="job.kind === 'process'"
+              :disabled="job.cancel_requested || !workspaceControl"
+              @click="cancelJob(job.id)"
+            >
+              Cancel
+            </button>
+          </div>
+        </section>
         <section class="panel activity">
           <div class="panel-title">
             <h2>Activity</h2>
@@ -747,5 +1081,8 @@ onUnmounted(() => {
         </section>
       </aside>
     </main>
+    <footer v-if="persistent && release" class="release-note">
+      Application {{ release }}
+    </footer>
   </div>
 </template>

@@ -88,6 +88,27 @@ alert's age; an old pending incident is not proof of current failure. Verify a
 console is still alive before sharing an old capability link, or open a fresh
 console. The core application never calls a messaging provider.
 
+## Persistent workspace
+
+Docker runs a separate workspace service. Retrieve its stable login link with
+`deploy.sh workspace DIRECTORY`, or supervise `live-transcript --json workspace`
+in a native installation. Share that link once in the authorized conversation;
+it remains usable across viewer changes and workspace restarts. Its login file
+lives in application state and must be retained with the deployment.
+
+The page can remain open while idle; it acquires no diagnostic desktop lease.
+Meeting control still uses the same `start`, `stop`, `status` and durable job
+interfaces. Stale stop requests are scoped to the observed run ID. A workspace
+restart or viewer failure is not permission to restart the VM or rejoin a room.
+For a readiness/headroom report, use `live-transcript --json capacity --max-min 90`.
+The wrapper's built-in startup checks do not reserve resources against other jobs.
+
+`console_ready` also announces a workspace link through the existing notification
+adapter. The application queues it; Hermes performs authorized delivery and
+acknowledges after success. Recording library links share the workspace's operator
+access, including retained transcripts/media. Use the existing temporary view-only
+console when only a current meeting view should be shared.
+
 ## Console links and early joining
 
 The same console URL opens the [meeting workspace](workspace.md): live transcript

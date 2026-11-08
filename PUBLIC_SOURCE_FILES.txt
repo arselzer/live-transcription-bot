@@ -174,3 +174,15 @@ docs/application-deployment.md
 src/live_transcript/runtime/qemu.py
 src/live_transcript/runtime/vm.Dockerfile
 tests/test_qemu.py
+src/live_transcript/runtime/capacity.py
+src/live_transcript/runtime/library.py
+src/live_transcript/runtime/workspace.py
+frontend/src/RecordingLibrary.vue
+src/live_transcript/runtime/stack.py
+deploy.sh
+tests/test_capacity.py
+tests/test_library.py
+tests/test_stack.py
+tests/test_workspace.py
+tests/test_audio_recovery.py
+tools/smoke_audio_server.py

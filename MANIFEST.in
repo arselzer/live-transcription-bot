@@ -174,3 +174,15 @@ include docs/application-deployment.md
 include src/live_transcript/runtime/qemu.py
 include src/live_transcript/runtime/vm.Dockerfile
 include tests/test_qemu.py
+include src/live_transcript/runtime/capacity.py
+include src/live_transcript/runtime/library.py
+include src/live_transcript/runtime/workspace.py
+include frontend/src/RecordingLibrary.vue
+include src/live_transcript/runtime/stack.py
+include deploy.sh
+include tests/test_capacity.py
+include tests/test_library.py
+include tests/test_stack.py
+include tests/test_workspace.py
+include tests/test_audio_recovery.py
+include tools/smoke_audio_server.py

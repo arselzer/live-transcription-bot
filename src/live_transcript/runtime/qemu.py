@@ -413,7 +413,7 @@ class CaptionConnection(socketserver.BaseRequestHandler):
             self.server.slots.release()
 
 
-def serve(root, spec, *, stop=None, guest_config="/config/guest.toml"):
+def serve(root, spec, *, stop=None, guest_config="/config/guest.toml", status_directory=None):
     root = private_directory(root)
     regular_files(root)
     validate_spec(spec)
@@ -435,6 +435,15 @@ def serve(root, spec, *, stop=None, guest_config="/config/guest.toml"):
                 while process.poll() is None and not stop.wait(
                     30 if (root / "initialized.json").exists() else 5
                 ):
+                    if status_directory:
+                        from live_transcript.runtime.capacity import vm_host_status
+
+                        try:
+                            atomic_json(
+                                Path(status_directory) / "capacity.json", vm_host_status(root, spec)
+                            )
+                        except OSError:
+                            print("VM capacity status could not be published", flush=True)
                     ready = guest_ready(root, spec)
                     if ready and not (root / "initialized.json").exists():
                         try:
@@ -478,6 +487,7 @@ def main():
     parser.add_argument("--spec", default="/config/vm.json")
     parser.add_argument("--health", action="store_true")
     parser.add_argument("--retry-setup", action="store_true")
+    parser.add_argument("--status-directory")
     args = parser.parse_args()
     root = Path(args.root)
     if args.health:
@@ -493,7 +503,7 @@ def main():
     stop = threading.Event()
     for signum in (signal.SIGTERM, signal.SIGINT):
         signal.signal(signum, lambda *_: stop.set())
-    serve(root, spec, stop=stop)
+    serve(root, spec, stop=stop, status_directory=args.status_directory)
     return 0
 
 

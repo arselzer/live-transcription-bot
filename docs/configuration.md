@@ -16,6 +16,7 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | `paths` | Data workspace, runtime directories, local model/VAD/binary, optional vault, archive destination/mount |
 | `vm` | SSH destination, libvirt name, IP, guest home, whether automatic libvirt start is allowed |
 | `console` | Isolated/shared login mode, private host credentials file, signed-session duration |
+| `capacity` | Recording-rate/copy estimates, guest disk reserve, memory headroom and startup service budgets |
 | `caption` | Trusted interface/port, speech endpoint, cadence, silence threshold and finalization delay |
 | `asr` | CPU fallback/adaptation, endpoint timeouts, backlog/throughput thresholds, GPU/CPU device settings |
 | `model` | Local OpenAI-compatible chat endpoint and served model name |
@@ -102,3 +103,24 @@ dedicated virtual environment, leaving distribution Python packages untouched.
 `asr.primary_device="cpu"` gives the full primary CPU-appropriate timeouts and
 reports its engine correctly. With CPU primary, reuse that endpoint for
 `asr.cpu_url` and leave `services.cpu_large` empty to avoid duplicate full models.
+
+
+`capacity.recording_bytes_per_minute` defaults to 32 MiB and is an estimate for
+combined source audio/video/evidence. `host_copy_factor` defaults to two host
+copies. When the managed VM disk shares that filesystem, its growth is counted
+as another copy. `guest_free_reserve_bytes` defaults to 1 GiB; application and VM
+backing filesystems use `storage.host_free_reserve_bytes` (16 GiB by default).
+`min_memory_available_bytes` defaults to 512 MiB for a new meeting launch.
+
+Startup budgets are configured by `capacity.startup_primary_mib`,
+`startup_cpu_small_mib`, `startup_app_mib`, `startup_captions_mib`,
+`startup_workspace_mib`, `startup_vm_overhead_mib` and `startup_reserve_mib`.
+The wrapper includes only services that are currently stopped in its startup
+estimate. Existing recordings continue when capacity later falls below reserve.
+
+`audio.microphone_device` defaults to `hw:0,0` on the managed snd-dummy card;
+`audio.microphone_source` defaults to `alsa_input.hw_0_0`. Idle preparation writes
+a dedicated PulseAudio startup script and managed service override. The same
+sink/source names are recreated after daemon restart. Browser recovery preserves
+mute, volume and track enablement; Google diagnostic mode with media hooks
+disabled does not have the virtual-microphone/output recovery hook.

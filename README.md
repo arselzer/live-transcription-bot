@@ -11,6 +11,30 @@ the transcript, then switches to the isolated VM console. The workspace shows
 recording health separately from recognition, with optional draft meeting notes.
 See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
 
+## Quick start with Docker
+
+On an x86-64 Linux host with Docker Engine/Compose and working KVM:
+
+```bash
+./deploy.sh init "$HOME/transcript-runtime"
+./deploy.sh up "$HOME/transcript-runtime"
+./deploy.sh check "$HOME/transcript-runtime"
+./deploy.sh workspace "$HOME/transcript-runtime"
+```
+
+Run these from a cloned checkout. The wrapper builds the committed application,
+handles UID/GID, downloads verified models and provisions the browser VM.
+Open the printed private workspace link to join a meeting, view/control its
+browser, read captions, or review saved recordings. Allow at least 24 GiB RAM
+and local space for models, VM disk and recordings. Initial setup needs internet.
+Host Python, FFmpeg, libvirt and Node are unnecessary for this deployment.
+
+`init` creates the deployment; `up` starts it. Keep the deployment directory when
+upgrading. After updating the checkout, `./deploy.sh update DIRECTORY` replaces
+only application services and leaves the VM running. `rollback` restores a
+compatible retained application release. See [installation and updates](docs/application-deployment.md)
+and [the workspace guide](docs/workspace.md).
+
 ## Choose a deployment
 
 | Starting point | Deployment |
@@ -110,6 +134,8 @@ password in its fragment. Keep that full link private. The workspace opens with
 searchable live captions, speaker labels, adjustable text size, follow-live and
 text export. Optional draft notes appear below the transcript. The **VM console**
 tab has the scaled viewer, one-step paste, keyboard shortcuts and reconnect.
+For an always-available page with meeting controls and a recording library, use
+`live-transcript workspace` or the Docker workspace service.
 Recording health, storage, speech status and activity remain visible beside it.
 **Listen** plays the selected VM’s meeting audio through your browser without
 enabling your microphone. Playback and recording have independent lifetimes.
@@ -289,7 +315,8 @@ tools/                explicit development/test tools
 deploy/systemd/       service templates
 ```
 
-There are no root-level script aliases. The VM receives one self-contained
+The deployment wrapper manages Docker installations; meeting commands use the
+installed CLI. The VM receives one self-contained
 `live-transcript.pyz` program, with external browser/media dependencies supplied
 by the prepared VM. Normal installed wheels can build this bundle too.
 

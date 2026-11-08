@@ -37,6 +37,8 @@ cpu_large = "whisper-stt-cpu.service"
 cpu_small = "whisper-stt-cpu-small.service"
 
 [audio]
+microphone_device = "hw:0,0"
+microphone_source = "alsa_input.hw_0_0"
 sink = "transcript"
 
 [console]
@@ -140,3 +142,9 @@ test_window_seconds = 600.0
 test_max_attempts = 6
 zoom_name_fallbacks = []
 name_retry_delay_seconds = 5.0
+
+[capacity]
+recording_bytes_per_minute = 33554432
+host_copy_factor = 2
+min_memory_available_bytes = 536870912
+guest_free_reserve_bytes = 1073741824

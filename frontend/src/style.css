@@ -806,4 +806,217 @@ h2 {
   }
 }
 
-.audio-panel audio { width: 100%; height: 36px; margin-top: 12px; }
+.audio-panel audio {
+  width: 100%;
+  height: 36px;
+  margin-top: 12px;
+}
+
+.meeting-controls {
+  display: flex;
+  align-items: end;
+  gap: 10px;
+  margin: 0 0 18px;
+  flex-wrap: wrap;
+}
+.meeting-controls label {
+  display: grid;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.meeting-controls input,
+.library-tools input,
+.library-passage-search input {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #d1dae6;
+  background: white;
+  color: #253143;
+  border-radius: 6px;
+}
+.meeting-link {
+  flex: 1;
+  min-width: 180px;
+}
+.meeting-duration {
+  width: 85px;
+}
+.meeting-controls .danger {
+  color: #973c43;
+  border-color: #edcccf;
+  background: #fff1f0;
+}
+.library-tools {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 16px;
+}
+.library-tools label {
+  flex: 1;
+}
+.library-layout {
+  display: grid;
+  grid-template-columns: 230px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+.recording-list {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.recording-item {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  text-align: left;
+  margin-bottom: 8px;
+  padding: 12px;
+}
+.recording-item strong {
+  overflow-wrap: anywhere;
+  font-size: 12px;
+  font-weight: 550;
+}
+.recording-item span {
+  font-size: 11px;
+  color: var(--muted);
+}
+.recording-item[aria-pressed="true"] {
+  background: #edf3fc;
+  border-color: #a8bad3;
+}
+.recording-detail {
+  min-width: 0;
+}
+.recording-detail h2 {
+  overflow-wrap: anywhere;
+  margin-top: 0;
+}
+.recording-detail audio {
+  width: 100%;
+  margin-top: 18px;
+}
+.recording-downloads {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--blue);
+  margin: 15px 0;
+}
+.recording-downloads a {
+  text-decoration: underline;
+}
+.library-passage-search {
+  display: block;
+  margin: 18px 0 8px;
+}
+.recorded-passages {
+  max-height: 60vh;
+  overflow-y: auto;
+}
+.recorded-passages article {
+  padding: 14px 8px;
+  border-bottom: 1px solid #e9edf2;
+}
+.recorded-passages article.playing {
+  background: #f1f6fd;
+}
+.recorded-passages article > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 12px;
+}
+.recorded-passages button {
+  padding: 3px 6px;
+  min-height: 26px;
+  font-size: 11px;
+  color: var(--blue);
+}
+.recording-detail .recorded-passages p {
+  font-size: 14px;
+  color: #344154;
+  margin: 8px 0 0;
+  line-height: 1.8;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.recording-events,
+.recording-notes {
+  margin: 18px 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.recording-events summary,
+.recording-notes summary {
+  cursor: pointer;
+}
+.recording-events ul {
+  padding-left: 18px;
+  line-height: 2;
+}
+.recording-events button {
+  font-size: 11px;
+  padding: 3px;
+  min-height: 25px;
+}
+.recording-notes pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font: inherit;
+  line-height: 1.8;
+}
+.library-empty p {
+  font-size: 13px;
+  color: var(--muted);
+  line-height: 1.8;
+}
+.job-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  font-size: 11px;
+}
+.job-row button {
+  min-height: 28px;
+  padding: 4px 8px;
+  font-size: 11px;
+}
+@media (max-width: 1100px) {
+  .library-layout {
+    grid-template-columns: 1fr;
+  }
+  .recording-list {
+    max-height: 240px;
+  }
+  .recording-item {
+    display: inline-grid;
+    width: calc(50% - 5px);
+    margin-right: 5px;
+    vertical-align: top;
+  }
+}
+@media (max-width: 480px) {
+  .meeting-controls button {
+    flex: 1 0 100%;
+  }
+  .recording-item {
+    display: grid;
+    width: 100%;
+    margin-right: 0;
+  }
+}
+
+main.reviewing {
+  grid-template-columns: minmax(0, 1fr);
+}
+.release-note {
+  color: var(--muted);
+  font-size: 10px;
+  padding: 0 0 18px;
+  text-align: right;
+}

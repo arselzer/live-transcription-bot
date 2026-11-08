@@ -35,16 +35,9 @@ def emit(value, as_json=False):
 
 
 def current():
-    from live_transcript.core.config import get
+    from live_transcript.runtime.state import current as read
 
-    path = Path(get("paths", "logs")) / "current_meeting.json"
-    try:
-        value = json.loads(path.read_text())
-        if not isinstance(value, dict):
-            raise ValueError("Invalid meeting bookkeeping; inspect the private state file")
-        return value
-    except FileNotFoundError:
-        return dict(status="idle")
+    return read()
 
 
 def runtime_info():
@@ -334,6 +327,24 @@ def main(argv=None):
             "deployment", help="export the container application with an isolated browser VM"
         )
     )
+    stack = commands.add_parser("stack", help="manage an owned Compose application release")
+    stack.add_argument("directory")
+    stack.add_argument(
+        "action",
+        choices=(
+            "hold-lock",
+            "status",
+            "capacity",
+            "guard-stop",
+            "url",
+            "prepare-update",
+            "commit-update",
+            "abort-update",
+            "rollback",
+        ),
+    )
+    stack.add_argument("--running", nargs="*", default=[])
+    stack.add_argument("--stop-guard", action="store_true", help=argparse.SUPPRESS)
     for name in ("check", "status", "config", "info"):
         command = commands.add_parser(name)
         if name == "check":
@@ -355,7 +366,23 @@ def main(argv=None):
     start.add_argument("--name", help="transparent participant name; defaults to identity.name")
     start.add_argument("--passcode")
     start.add_argument("--dry", action="store_true")
-    commands.add_parser("stop", help="gracefully stop the exact current session")
+    stop = commands.add_parser("stop", help="gracefully stop the exact current session")
+    stop.add_argument("--run-id", help="refuse to stop a different meeting")
+    workspace = commands.add_parser(
+        "workspace", help="persistent meeting controls and recording library"
+    )
+    workspace.add_argument("--listen", default="127.0.0.1")
+    workspace.add_argument("--port", type=int, default=6080)
+    workspace.add_argument("--advertise-host")
+    workspace.add_argument(
+        "--public-url", help="external HTTP(S) origin when using a reverse proxy"
+    )
+    workspace.add_argument("--view-only", action="store_true")
+    workspace.add_argument("--health", action="store_true")
+    capacity = commands.add_parser("capacity", help="read-only recording headroom estimates")
+    capacity.add_argument("--max-min", type=int, default=0)
+    recordings = commands.add_parser("recordings", help="browse retained recordings")
+    recordings.add_argument("--refresh", action="store_true")
     console = commands.add_parser(
         "console", help="view the VM browser through a private local noVNC tunnel"
     )
@@ -439,7 +466,11 @@ def main(argv=None):
         runtime_config.CONFIG = runtime_config.load()
         from live_transcript.core.config import get, ssh_options
 
-        if args.command == "deployment":
+        if args.command == "stack":
+            from live_transcript.runtime.stack import run
+
+            emit(run(args), args.json)
+        elif args.command == "deployment":
             from live_transcript.runtime.containers import export_application
 
             emit(export_application(args), args.json)
@@ -447,6 +478,24 @@ def main(argv=None):
             from live_transcript.runtime.containers import export_backend
 
             emit(export_backend(args), args.json)
+        elif args.command == "workspace":
+            from live_transcript.runtime.workspace import run
+
+            return run(args, lambda value: print(json.dumps(value), flush=True))
+        elif args.command == "capacity":
+            from live_transcript.runtime.capacity import report, guest_free_bytes
+
+            try:
+                free = guest_free_bytes()
+            except (OSError, ValueError, subprocess.SubprocessError):
+                free = None
+            emit(report(args.max_min, guest_free=free), args.json)
+        elif args.command == "recordings":
+            from live_transcript.runtime.library import scan, listing
+
+            if args.refresh:
+                scan()
+            emit(listing(), args.json)
         elif args.command == "console":
             if get("runtime", "supervisor") == "app" and not os.environ.get("LT_APPLICATION_JOB"):
                 from live_transcript.runtime.application import submit, follow
@@ -528,6 +577,8 @@ def main(argv=None):
             return start(*options)
         elif args.command == "stop":
             meeting = current()
+            if args.run_id and args.run_id != meeting.get("run_id"):
+                raise ValueError("current meeting changed; refusing stale stop")
             if meeting.get("status") not in ("active", "control_lost") or not meeting.get("run_id"):
                 raise ValueError("no current meeting to stop")
             import re

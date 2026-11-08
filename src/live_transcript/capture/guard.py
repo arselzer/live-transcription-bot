@@ -271,6 +271,9 @@ class Guard:
         self.slots = {}
         self.stopped = False
         self.last_sync = 0
+        self.audio_server = None
+        self.audio_probe_at = 0
+        self.audio_outage_at = None
 
     def launch(self, name):
         previous = self.slots.get(name, {})
@@ -315,7 +318,27 @@ class Guard:
     def tick(self):
         import shutil
 
+        now = time.time()
+        if now - self.audio_probe_at >= 3:
+            from live_transcript.capture.audio import server_identity
+
+            identity = server_identity()
+            if self.audio_server and identity != self.audio_server and self.audio_outage_at is None:
+                self.audio_outage_at = self.audio_probe_at
+                event(
+                    self.root,
+                    "audio_server_interrupted",
+                    since=self.audio_outage_at,
+                    estimated=True,
+                )
+            if identity and self.audio_outage_at is not None:
+                event(
+                    self.root, "audio_server_recovered", since=self.audio_outage_at, estimated=True
+                )
+                self.audio_outage_at = None
+            self.audio_server, self.audio_probe_at = identity, now
         health = dict(
+            audio_server_running=self.audio_server is not None,
             utc=time.time(),
             started=self.config["started"],
             free_bytes=shutil.disk_usage(self.root).free,

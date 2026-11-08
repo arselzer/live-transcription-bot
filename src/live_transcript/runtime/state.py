@@ -3,6 +3,7 @@
 import argparse
 import fcntl
 import json
+import math
 from pathlib import Path
 import time
 import os
@@ -12,8 +13,20 @@ from live_transcript.core.options import rejoin_options, zoom_invitation
 from live_transcript.core.config import get
 
 
-def begin(url, args, directory=None):
-    options, minutes = rejoin_options(args)
+def current():
+    path = Path(get("paths", "logs")) / "current_meeting.json"
+    try:
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise ValueError("Invalid meeting bookkeeping; inspect the private state file")
+        return value
+    except FileNotFoundError:
+        return dict(status="idle")
+
+
+def validate_invitation(url):
+    if not isinstance(url, str) or len(url) > 4096 or any(ord(c) < 32 for c in url):
+        raise ValueError("Invalid meeting invitation")
     from live_transcript.providers.proton import is_proton_url, validate_url
 
     if is_proton_url(url):
@@ -27,6 +40,15 @@ def begin(url, args, directory=None):
             validate_google(url)
         else:
             zoom_invitation(url)
+
+
+def begin(url, args, directory=None):
+    options, minutes = rejoin_options(args)
+    validate_invitation(url)
+    now = time.time()
+    deadline = float(os.environ.get("LT_DEADLINE", now + minutes * 60))
+    if not math.isfinite(deadline) or deadline <= now:
+        raise RuntimeError("Meeting request expired before joining")
     directory = Path(directory or get("paths", "logs"))
     token = os.environ["LT_RUN_ID"]
     if not __import__("re").fullmatch(r"[A-Za-z0-9-]+", token):
@@ -47,12 +69,11 @@ def begin(url, args, directory=None):
             safe["--passcode"] = "REDACTED"
         import shlex
 
-        now = time.time()
         state = dict(
             url=url,
             args=shlex.join([v for item in safe.items() for v in item]),
             started=now,
-            deadline=float(os.environ.get("LT_DEADLINE", now + minutes * 60)),
+            deadline=deadline,
             pid=os.getppid(),
             run_id=token,
             args_file=str(secret),

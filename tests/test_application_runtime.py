@@ -68,6 +68,45 @@ class ApplicationTests(unittest.TestCase):
         self.wait(app.ready)
         return process
 
+    def test_cancellation_is_requested_without_signalling_foreign_namespaces(self):
+        row = self.queue.submit("process", [str(self.root / "fixture.wav")], key="cancel-fixture")
+        row.update(status="running", namespace="another-namespace", pid=os.getpid())
+        with self.queue.db:
+            self.queue.save(row)
+        with patch.object(app, "terminate") as terminate:
+            app.request_cancel(row["id"])
+            first = self.queue.row(row["id"])
+            app.request_cancel(row["id"])
+            self.assertEqual(self.queue.row(row["id"])["cancel_at"], first["cancel_at"])
+            terminate.assert_not_called()
+        app.Queue.finish(self.queue, row, 1, interrupted=True)
+        self.assertEqual(self.queue.row(row["id"])["status"], "cancelled")
+        self.assertTrue(app.cancellation_file(self.root / "fixture.wav").is_file())
+
+    def test_recording_and_backup_workers_are_not_cancellable_from_the_workspace(self):
+        row = self.queue.submit("mirror", [], key="protected-backup")
+        with self.assertRaises(ValueError):
+            app.request_cancel(row["id"])
+        self.assertEqual(self.queue.row(row["id"])["status"], "queued")
+
+    def test_expired_meeting_is_not_started_and_nonfinite_deadlines_are_rejected(self):
+        with self.assertRaises(ValueError):
+            self.queue.submit("launch", [], env={"LT_DEADLINE": "nan"})
+        row = self.queue.submit("launch", ["fixture"], env={"LT_DEADLINE": str(time.time() - 1)})
+        self.start()
+        self.wait(lambda: self.queue.row(row["id"])["status"] == "expired")
+        self.assertFalse((app.directory() / (row["id"] + ".log")).exists())
+
+    def test_shared_heartbeat_does_not_signal_or_resolve_foreign_pids(self):
+        from live_transcript.core.files import atomic_json
+
+        atomic_json(
+            app.directory() / "health.json",
+            dict(utc=time.time(), identity=app.identity(), pid=999999, namespace="foreign"),
+        )
+        self.assertFalse(app.ready())
+        self.assertTrue(app.heartbeat_ready())
+
     def test_durable_completion_idempotency_and_scheduler_lock(self):
         self.start()
         first = app.submit("watchdog", ["--dry-run", "--json"], key="readiness-check")

@@ -36,6 +36,10 @@ def application_options(parser):
         "--model-url", default="", help="notes endpoint reachable from the containers"
     )
     parser.add_argument("--model-name", default="local-model")
+    parser.add_argument("--workspace-port", type=int, default=6080)
+    parser.add_argument("--workspace-listen", default="127.0.0.1")
+    parser.add_argument("--workspace-host", default="")
+    parser.add_argument("--workspace-url", default="")
     parser.add_argument(
         "--managed-vm", action="store_true", help="provision an isolated KVM guest with Compose"
     )
@@ -57,7 +61,7 @@ def export_application(args):
             "Select a prepared VM profile with pinned SSH identity_file and known_hosts"
         )
     # Config port checks happen before weight downloads or writing deployment data.
-    ports = [args.port, args.speech_port, args.small_speech_port]
+    ports = [args.port, args.speech_port, args.small_speech_port, args.workspace_port]
     if args.managed_vm:
         ports.append(args.vm_ssh_port)
     if len(set(ports)) != len(ports) or any(
@@ -68,6 +72,20 @@ def export_application(args):
     directory = Path(args.directory).expanduser().absolute()
     if directory.exists() and any(directory.iterdir()):
         raise ValueError("Export requires an empty directory")
+    from live_transcript.runtime.console import viewer_url
+
+    workspace_address = ipaddress.ip_address(args.workspace_listen)
+    if (
+        workspace_address.version != 4
+        or workspace_address.is_unspecified
+        and not args.workspace_host
+    ):
+        raise ValueError("Set an advertised workspace host for an unrestricted listener")
+    viewer_url(args.workspace_host or args.workspace_listen, args.workspace_port, "validation")
+    if args.workspace_url:
+        from live_transcript.runtime.workspace import public_origin
+
+        public_origin(args.workspace_url)
     vm_spec = None
     vm_data = None
     if args.managed_vm:
@@ -214,7 +232,16 @@ def export_application(args):
         ),
         **{
             key: CONFIG[key]
-            for key in ("audio", "browser", "google", "admission", "recovery", "identity")
+            for key in (
+                "audio",
+                "browser",
+                "google",
+                "admission",
+                "recovery",
+                "identity",
+                "capacity",
+                "storage",
+            )
         },
     }
     profile = directory / "application.toml"
@@ -228,6 +255,57 @@ def export_application(args):
     )
     load(profile)  # reject a bad generated profile before any container is started
     build_application_wheel(directory)
+    write_application_dockerfile(directory)
+    atomic_text(
+        directory / ".dockerignore",
+        "*\n!*.whl\n!backend.pyz\n!application.Dockerfile\n!backend.Dockerfile\n!whisper.Dockerfile\n!vm.Dockerfile\n",
+    )
+    if vm_spec:
+        from live_transcript.core.config import write_vm_config
+
+        write_vm_config(directory / "vm-guest.toml")
+        add_managed_vm(compose, directory, vm_data, vm_spec, args.kvm_gid, data / "state/vm-status")
+    from copy import deepcopy
+
+    workspace = deepcopy(compose["services"]["app"])
+    workspace.pop("build", None)
+    workspace.update(
+        command=[
+            "workspace",
+            "--listen",
+            args.workspace_listen,
+            "--port",
+            str(args.workspace_port),
+            "--advertise-host",
+            args.workspace_host or args.workspace_listen,
+        ],
+        mem_limit="768m",
+        cpus=1,
+        pids_limit=128,
+        healthcheck=dict(
+            test=["CMD", "live-transcript", "workspace", "--health"],
+            interval="10s",
+            timeout="4s",
+            retries=3,
+            start_period="60s",
+        ),
+    )
+    if args.workspace_url:
+        workspace["command"] += ["--public-url", args.workspace_url]
+    # Workspace/library stay available while the VM is booting or unavailable.
+    workspace.pop("depends_on", None)
+    compose["services"]["workspace"] = workspace
+    atomic_json(directory / "compose.json", compose)
+    from live_transcript.runtime.stack import register
+
+    register(directory)
+    result.update(application=True, profile=str(profile), vm_managed=bool(vm_spec))
+    if vm_data:
+        result["vm_data"] = str(vm_data)
+    return result
+
+
+def write_application_dockerfile(directory):
     source_dockerfile = (
         files("live_transcript.runtime").joinpath("application.Dockerfile").read_text()
     )
@@ -248,23 +326,9 @@ RUN python3 -m pip install --no-cache-dir Pillow==13.0.0 /tmp/application/*.whl 
 USER 10001:10001
 """,
     )
-    atomic_text(
-        directory / ".dockerignore",
-        "*\n!*.whl\n!backend.pyz\n!application.Dockerfile\n!backend.Dockerfile\n!whisper.Dockerfile\n!vm.Dockerfile\n",
-    )
-    if vm_spec:
-        from live_transcript.core.config import write_vm_config
-
-        write_vm_config(directory / "vm-guest.toml")
-        add_managed_vm(compose, directory, vm_data, vm_spec, args.kvm_gid)
-    atomic_json(directory / "compose.json", compose)
-    result.update(application=True, profile=str(profile), vm_managed=bool(vm_spec))
-    if vm_data:
-        result["vm_data"] = str(vm_data)
-    return result
 
 
-def add_managed_vm(compose, directory, storage, spec, kvm_gid):
+def add_managed_vm(compose, directory, storage, spec, kvm_gid, status=None):
     """A private sidecar gets KVM and disk; the controller gets only operator SSH."""
     ident = compose["name"].removeprefix("live-transcript-")
     atomic_json(directory / "vm.json", spec)
@@ -310,6 +374,12 @@ def add_managed_vm(compose, directory, storage, spec, kvm_gid):
         ),
         labels={"io.live-transcript.installation": ident},
     )
+    if status is not None:
+        status.mkdir(parents=True, exist_ok=True, mode=0o700)
+        compose["services"]["vm"]["volumes"].append(
+            dict(type="bind", source=str(status).replace("$", "$$"), target="/status")
+        )
+        compose["services"]["vm"]["command"] = ["--status-directory", "/status"]
     # Startup ordering only: never propagate controller/ASR restarts to the VM.
     compose["services"]["app"]["depends_on"] = {"vm": {"condition": "service_healthy"}}
 

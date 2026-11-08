@@ -213,3 +213,16 @@ The final generated bundle passed Compose health checks. Test containers were
 removed while retaining their journal and validation evidence. This establishes
 that recovery path on Linux x86-64 Docker Engine, not cross-platform deployment,
 meeting-provider admission or a word-accuracy benchmark.
+
+
+The development guest bundle includes `test-audio-server` for a deliberate
+PulseAudio crash drill under `xvfb-run`. It refuses an occupied VM, holds its idle
+lease, creates a local synthetic WebRTC call, kills only the owned audio daemon,
+and verifies that device recreation, browser output reset, original audio/video
+capture and virtual-microphone mute preservation recover. It never joins a room.
+Run it only on a dedicated test VM. Results and source recordings remain there.
+
+Workspace tests cover authenticated byte-range playback, symlink/path rejection,
+stale run controls, catalogue parsing, capacity accounting and reversible releases.
+Use the synthetic UI walkthrough for frontend checks; live provider admission
+still requires separate testing in an authorized room.

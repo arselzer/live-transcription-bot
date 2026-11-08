@@ -69,7 +69,11 @@ DEFAULTS = {
         "job_timeout_seconds": 43200,
         "job_attempts": 6,
     },
-    "audio": {"sink": "transcript"},
+    "audio": {
+        "sink": "transcript",
+        "microphone_device": "hw:0,0",
+        "microphone_source": "alsa_input.hw_0_0",
+    },
     "google": {
         "input_mode": "native",
         "admission_timeout": 330.0,
@@ -78,6 +82,19 @@ DEFAULTS = {
         "operator_recovery_seconds": 120.0,
     },
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
+    "capacity": {
+        "recording_bytes_per_minute": 33554432,
+        "host_copy_factor": 2,
+        "min_memory_available_bytes": 536870912,
+        "guest_free_reserve_bytes": 1073741824,
+        "startup_primary_mib": 4096,
+        "startup_cpu_small_mib": 1536,
+        "startup_app_mib": 4096,
+        "startup_captions_mib": 512,
+        "startup_workspace_mib": 768,
+        "startup_vm_overhead_mib": 512,
+        "startup_reserve_mib": 512,
+    },
     "console": {"login_mode": "isolated", "shared_login_file": "", "session_seconds": 7200},
     "caption": {
         "host": "127.0.0.1",
@@ -183,6 +200,20 @@ def load(path=None):
     for key, value in config["paths"].items():
         if value:
             config["paths"][key] = os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+    for key, lower, upper in (
+        ("recording_bytes_per_minute", 1048576, 1073741824),
+        ("host_copy_factor", 1, 4),
+        ("min_memory_available_bytes", 0, 137438953472),
+        ("guest_free_reserve_bytes", 0, 1099511627776),
+    ):
+        if (
+            type(config["capacity"][key]) is not int
+            or not lower <= config["capacity"][key] <= upper
+        ):
+            raise ValueError("Invalid capacity." + key)
+    for key, value in config["capacity"].items():
+        if key.startswith("startup_") and (type(value) is not int or not 0 <= value <= 131072):
+            raise ValueError("Invalid capacity." + key)
     console = config["console"]
     if console["login_mode"] not in ("isolated", "shared"):
         raise ValueError("console.login_mode must be isolated or shared")
@@ -252,6 +283,10 @@ def load(path=None):
         ZoneInfo(config["calendar"]["timezone"])
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise ValueError("invalid calendar.timezone") from exc
+    if not re.fullmatch(
+        r"hw:[0-9]{1,2},[0-9]{1,2}", config["audio"]["microphone_device"]
+    ) or not re.fullmatch(r"[A-Za-z][A-Za-z0-9_.-]{0,63}", config["audio"]["microphone_source"]):
+        raise ValueError("Invalid audio microphone device/source")
     if not re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]{0,63}", config["audio"]["sink"]):
         raise ValueError("audio.sink must be a simple PulseAudio sink name")
     if config["google"]["input_mode"] not in ("native", "dom"):

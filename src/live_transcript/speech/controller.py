@@ -16,6 +16,11 @@ from live_transcript.speech.browser import play_wav
 class VoiceController:
     def __init__(self, page, session, name, directory=None, t0=None, provider="proton"):
         self.page, self.session, self.name = page, session, name
+        from live_transcript.capture.audio import server_identity
+
+        self.audio_identity = server_identity()
+        self.audio_recovery_pending = False
+        self.audio_probe_at = 0
         self.provider = provider
         self.root = Path(directory or get("vm", "home"))
         self.inbox = self.root / "voice_requests"
@@ -69,7 +74,38 @@ class VoiceController:
         from live_transcript.runtime.console import operator_control_active
 
         if operator_control_active():
+            from live_transcript.capture.audio import server_identity
+
+            self.audio_identity = server_identity()
+            self.audio_recovery_pending = False
             return
+        if time.monotonic() - self.audio_probe_at >= 3:
+            from live_transcript.capture.audio import server_identity
+            import subprocess
+
+            identity = server_identity()
+            if self.audio_identity and identity != self.audio_identity:
+                self.audio_recovery_pending = True
+            self.audio_identity = identity
+            self.audio_probe_at = time.monotonic()
+            if identity and self.audio_recovery_pending:
+                try:
+                    ready = (
+                        subprocess.run(["pactl", "info"], capture_output=True, timeout=1).returncode
+                        == 0
+                    )
+                except (OSError, subprocess.SubprocessError):
+                    ready = False
+                if ready:
+                    from live_transcript.speech.browser import recover_output
+
+                    count = recover_output(self.page)
+                    archive = self.root / "rec" / (self.session + ".archive")
+                    if archive.is_dir():
+                        from live_transcript.capture.guard import event
+
+                        event(archive, "browser_audio_output_reset", outputs=count)
+                    self.audio_recovery_pending = False
         requests = sorted(self.inbox.glob("*.json"))
         if not requests:
             return

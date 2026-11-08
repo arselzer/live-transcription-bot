@@ -49,6 +49,14 @@ fi
 ssh "${SSHK[@]}" "$LT_VM" 'u=$(systemctl --user list-units --type=service --state=active,activating,deactivating --no-legend "live-transcript-meeting-*") || exit 1; [ -z "$u" ]' \
   || { echo '[live-transcript] VM ownership could not be confirmed idle; inspect status before launching' >&2; exit 3; }
 
+# Read-only admission check. Never stop an existing recorder for low capacity.
+"$PYTHON" -m live_transcript.worker capacity --require --max-min "$("$PYTHON" - "$@" <<'PYCAP'
+from live_transcript.core.options import rejoin_options
+import sys
+print(rejoin_options(sys.argv[1:])[1])
+PYCAP
+)" >/dev/null
+
 # run bookkeeping for the watchdog/rejoiner
 MJSON=$LT_LOGS/current_meeting.json
 JLOG="$LT_LOGS/join-$LT_RUN_ID.log"

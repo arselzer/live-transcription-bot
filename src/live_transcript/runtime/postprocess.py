@@ -240,6 +240,24 @@ def _process(argv=None):
                     )
             except Exception as _de:
                 print("voice diarization skipped:", _de, flush=True)
+        atomic_json(
+            Path(WAV).with_suffix(".transcript.json"),
+            dict(
+                version=1,
+                source="final",
+                audio=dict(bytes=Path(WAV).stat().st_size, mtime_ns=Path(WAV).stat().st_mtime_ns),
+                lines=[
+                    dict(
+                        t=u["t"],
+                        end=u.get("end", u["t"]),
+                        speaker=u.get("voice_name") or speaker_at(u["t"]) or "",
+                        text=u["text"],
+                        speaker_source="observed" if speaker_at(u["t"]) else "unconfirmed",
+                    )
+                    for u in utterances
+                ],
+            ),
+        )
         txt_path = WAV.rsplit(".", 1)[0] + ".txt"
         atomic_text(txt_path, transcript)
         print(

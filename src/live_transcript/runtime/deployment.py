@@ -19,6 +19,7 @@ TEST_TOOLS = (
     "session_lifecycle_fixture.py",
     "stop_recording_fixture.py",
     "smoke_recording_guard.py",
+    "smoke_audio_server.py",
     "smoke_admission.py",
 )
 

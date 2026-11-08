@@ -11,7 +11,7 @@ Two application deployments are supported:
 - **Docker:** the application image packages the CLI, UI/API, media tools,
   retrieval and final processing. Compose can provision a QEMU/KVM guest, or
   connect to a prepared VM. An application supervisor
-  owns durable jobs; caption ingest and live speech have separate containers.
+  owns durable jobs; caption ingest, workspace and live speech have separate containers.
   See [application deployment](application-deployment.md).
 
 A managed VM sidecar has a private Compose network, a persistent guest disk and
@@ -50,3 +50,16 @@ console and bounded controls. It has no arbitrary command or proxy-target API.
 The caption TCP protocol belongs on the trusted VM/application network.
 Hermes invokes the same CLI and notification contract as a human operator; it is
 not required for recording or the workspace. See [Hermes integration](hermes.md).
+
+
+The persistent workspace owns disposable viewer connections, bounded manual
+control leases and a local recording catalogue. A catalogue worker scans retained
+artifacts in a separate process; media routes expose only indexed artifact IDs.
+The app's SQLite job queue is the control boundary between workspace and app
+containers. Cancellation requests are committed there and executed by the owning
+scheduler in its own PID namespace.
+
+Managed VM capacity is published through a narrow status-directory bind mount.
+The application reads host backing-store headroom without receiving the disk or
+administrative key. Application releases have separate versioned image tags and
+a pending-update journal; update/rollback targets exclude VM and speech services.

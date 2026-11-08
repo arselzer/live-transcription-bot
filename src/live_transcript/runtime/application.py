@@ -10,6 +10,7 @@ import argparse
 import fcntl
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -25,6 +26,7 @@ from live_transcript.core.files import atomic_json
 
 KINDS = {
     "launch",
+    "stop",
     "mirror",
     "recover",
     "process",
@@ -35,6 +37,11 @@ KINDS = {
 }
 ENV_KEYS = {"LT_EXPECT_RUN_ID", "LT_DEADLINE", "LT_WAIT_FOR_LOCK", "LT_CALENDAR_JOB"}
 TERMINAL = {"complete", "failed", "interrupted", "expired", "cancelled"}
+
+
+def cancellation_file(wav):
+    key = hashlib.sha256(os.path.abspath(os.path.expanduser(str(wav))).encode()).hexdigest()
+    return directory() / "cancelled" / (key + ".json")
 
 
 def identity():
@@ -131,6 +138,9 @@ class Queue:
             or any(not isinstance(v, str) or len(v) > 512 or "\0" in v for v in env.values())
         ):
             raise ValueError("Invalid application job")
+        explicit_deadline = float(env["LT_DEADLINE"]) if "LT_DEADLINE" in env else None
+        if explicit_deadline is not None and not math.isfinite(explicit_deadline):
+            raise ValueError("Invalid application job deadline")
         key = key or (kind + "-" + uuid.uuid4().hex)
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", key):
             raise ValueError("Invalid application job identity")
@@ -172,7 +182,10 @@ class Queue:
                 status="queued",
                 due=due or now,
                 created=now,
-                deadline=(due or now) + get("runtime", "job_timeout_seconds"),
+                deadline=min(
+                    (due or now) + get("runtime", "job_timeout_seconds"),
+                    explicit_deadline if explicit_deadline is not None else float("inf"),
+                ),
                 attempts=0,
                 period=period,
                 pid=None,
@@ -199,6 +212,17 @@ class Queue:
             if abandoned and alive(latest):
                 return
             row = latest
+            if row.get("cancel_requested"):
+                row.update(status="cancelled", returncode=code)
+                self.save(row)
+                if row["kind"] == "process" and len(row["arguments"]) == 1:
+                    try:
+                        path = cancellation_file(row["arguments"][0])
+                        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                        atomic_json(path, dict(utc=time.time(), status="cancelled"))
+                    except OSError:
+                        pass  # The durable queue result remains authoritative.
+                return
             retry = (
                 row["kind"] in ("mirror", "recover", "process", "calendar-dispatch")
                 and row["attempts"] < get("runtime", "job_attempts")
@@ -218,6 +242,15 @@ class Queue:
             elif code and retry:
                 row.update(status="queued", due=time.time() + min(60, 5 * 2 ** row["attempts"]))
             self.save(row)
+
+
+def heartbeat_ready():
+    """Shared-volume health, without interpreting another container's PID."""
+    try:
+        value = json.loads((directory() / "health.json").read_text())
+        return value.get("identity") == identity() and 0 <= time.time() - value["utc"] < 10
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
 
 
 def ready():
@@ -247,6 +280,14 @@ def command(row):
         from live_transcript.runtime.launcher import command as launch
 
         return launch(*row["arguments"])
+    if row["kind"] == "stop":
+        if (
+            len(row["arguments"]) != 2
+            or row["arguments"][0] != "--run-id"
+            or not re.fullmatch(r"[A-Za-z0-9-]{1,80}", row["arguments"][1])
+        ):
+            raise ValueError("Invalid meeting stop job")
+        return [sys.executable, "-u", "-m", "live_transcript", "stop", *row["arguments"]]
     if row["kind"] == "console":
         return [
             sys.executable,
@@ -312,13 +353,21 @@ def job(ident, nonce):
     signal.signal(signal.SIGTERM, stop)
     signal.signal(signal.SIGINT, stop)
     try:
+        latest = queue.row(ident)
+        if stopped or latest.get("cancel_requested") or time.time() >= row["deadline"]:
+            queue.finish(row, 1, interrupted=True)
+            return 1
         env = environment(dict(os.environ, **row["env"], LT_APPLICATION_JOB=ident))
         proc = subprocess.Popen(
             command(row), env=env, stdin=subprocess.DEVNULL, start_new_session=True
         )
-        row.update(child_pid=proc.pid, child_ticks=stamp(proc.pid))
         with queue.db:
+            queue.db.execute("BEGIN IMMEDIATE")
+            row = queue.row(ident)
+            row.update(child_pid=proc.pid, child_ticks=stamp(proc.pid))
             queue.save(row)
+        if row.get("cancel_requested"):
+            stop()
         while proc.poll() is None:
             if stopped:
                 try:
@@ -342,6 +391,30 @@ def cancel(key):
             if row and row["status"] == "queued":
                 row["status"] = "cancelled"
                 queue.save(row)
+    finally:
+        queue.close()
+
+
+def request_cancel(key, *, allowed_kind="process"):
+    if not isinstance(key, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,159}", key):
+        raise ValueError("Invalid job identity")
+    queue = Queue()
+    try:
+        with queue.db:
+            queue.db.execute("BEGIN IMMEDIATE")
+            row = queue.row(key)
+            if (
+                not row
+                or row["identity"] != identity()
+                or row["kind"] != allowed_kind
+                or row["status"] in TERMINAL
+            ):
+                raise ValueError("This job cannot be cancelled")
+            row["cancel_requested"] = True
+            row.setdefault("cancel_at", time.time())
+            if row["status"] == "queued":
+                row["status"] = "cancelled"
+            queue.save(row)
     finally:
         queue.close()
 
@@ -408,7 +481,13 @@ def serve():
         signal.signal(signal.SIGINT, stop)
         atomic_json(
             queue.root / "health.json",
-            dict(utc=time.time(), pid=os.getpid(), ticks=stamp(os.getpid()), namespace=namespace()),
+            dict(
+                utc=time.time(),
+                pid=os.getpid(),
+                ticks=stamp(os.getpid()),
+                namespace=namespace(),
+                identity=identity(),
+            ),
         )
         for kind, seconds in (
             ("watchdog", get("runtime", "watchdog_seconds")),
@@ -436,7 +515,11 @@ def serve():
                     raise RuntimeError("Unfinished jobs belong to a different VM or data root")
                 if row["status"] in ("starting", "running"):
                     if alive(row):
-                        if time.time() > row["deadline"]:
+                        if row.get("cancel_requested"):
+                            terminate(
+                                row, force=time.time() > row.get("cancel_at", time.time()) + 20
+                            )
+                        elif time.time() > row["deadline"]:
                             terminate(row, force=time.time() > row["deadline"] + 20)
                         continue
                     if row["status"] == "starting" and time.time() - row["updated"] < 10:
@@ -474,6 +557,10 @@ def serve():
                     ticks=None,
                 )
                 with queue.db:
+                    queue.db.execute("BEGIN IMMEDIATE")
+                    latest = queue.row(row["id"])
+                    if latest["status"] != "queued" or latest.get("cancel_requested"):
+                        continue
                     queue.save(row)
                 log = queue.root / (row["id"] + ".log")
                 with log.open("ab") as stream:
@@ -503,6 +590,7 @@ def serve():
                     pid=os.getpid(),
                     ticks=stamp(os.getpid()),
                     namespace=namespace(),
+                    identity=identity(),
                 ),
             )
             time.sleep(0.5)
