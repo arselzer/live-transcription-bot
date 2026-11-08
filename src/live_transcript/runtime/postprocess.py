@@ -170,6 +170,15 @@ def _process(argv=None):
                 "Recognition failed quality checks; original audio and previous outputs retained"
             )
 
+        from live_transcript.transcription.dedup import collapse
+
+        utterances, loop_duplicates = collapse(utterances)
+        if loop_duplicates:
+            print(
+                f"loop dedup: collapsed {len(loop_duplicates)} consecutive near-identical "
+                "phrases (short-run whisper repetition bleed)",
+                flush=True,
+            )
         transcript = "\n".join(
             f"[{int(u['t'] // 60):02d}:{int(u['t'] % 60):02d}] {u['text']}" for u in utterances
         )
@@ -334,6 +343,7 @@ def _process(argv=None):
                 if "failed" in (summary_status["status"], video_status["status"])
                 else "complete",
                 quality=quality,
+                loop_deduplication=dict(dropped=len(loop_duplicates)),
                 audio_retained=WAV,
                 artifacts=artifacts,
                 summary=summary_status,

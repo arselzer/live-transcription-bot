@@ -76,6 +76,7 @@ def status(token):
         token=token,
         phase="missing",
         joiner_alive=False,
+        joined=prefix.with_suffix(".joined.json").exists(),
         requested_stop=stop_reason is not None and stop_reason != "recovery",
         free_bytes=shutil.disk_usage(HOME).free,
     )
@@ -248,6 +249,7 @@ def worker(token, args):
                 *worker_command(test_role or "join"),
                 *args,
             ],
+            env=dict(os.environ, LT_SESSION_MARKER=str(prefix.with_suffix(".joined.json"))),
             start_new_session=True,
         )
         try:

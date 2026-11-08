@@ -377,6 +377,16 @@ def tick(state, dry_run=False):
                 "recovery unavailable or retry limit reached; source evidence retained"
             )
     if remote and remote.get("phase") == "running" and remote.get("archive"):
+        if remote.get("joined") and not dry_run and state.get("announced_run") != token:
+            # One-shot operator confirmation; the issue disappears next tick.
+            state["announced_run"] = token
+            issues["recording-started"] = (
+                "recording started for "
+                + str(meeting.get("url", "")).split("#")[0]
+                + " (run "
+                + token
+                + ")"
+            )
         admission = remote.get("admission", {})
         if admission.get("stage") == "needs_operator":
             issues["admission-needs-operator"] = (
@@ -473,6 +483,12 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--json", action="store_true")
+    ap.add_argument(
+        "--ack-after-print",
+        action="store_true",
+        help="acknowledge this run's notification IDs after a successful stdout print "
+        "(for consumers whose hand-off has no receipt, e.g. cron stdout delivery)",
+    )
     a = ap.parse_args(argv)
     from contextlib import nullcontext
 
@@ -518,6 +534,12 @@ def main(argv=None):
             print(json.dumps(report, ensure_ascii=False), flush=True)
         elif report["messages"]:
             print("\n".join(report["messages"]), flush=True)
+        if a.ack_after_print and not a.dry_run and report["notifications"]:
+            # Print succeeded; consumers without a delivery receipt close the
+            # ledger here. Failed prints fall through unacked for retry.
+            from live_transcript.integrations.notifications import acknowledge
+
+            acknowledge([n["id"] for n in report["notifications"] if n.get("id")])
 
 
 if __name__ == "__main__":

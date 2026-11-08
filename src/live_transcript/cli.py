@@ -380,6 +380,7 @@ def main(argv=None):
     recover.add_argument("guest_wav")
     watchdog = commands.add_parser("watchdog", help="one bounded supervision tick")
     watchdog.add_argument("--dry-run", action="store_true")
+    watchdog.add_argument("--ack-after-print", action="store_true")
     calendar = commands.add_parser(
         "calendar", help="reconcile optional ICS calendar and exact launch timers"
     )
@@ -532,7 +533,11 @@ def main(argv=None):
         elif args.command == "watchdog":
             from live_transcript.runtime.watchdog import main as supervise
 
-            supervise((["--dry-run"] if args.dry_run else []) + (["--json"] if args.json else []))
+            supervise(
+                (["--dry-run"] if args.dry_run else [])
+                + (["--json"] if args.json else [])
+                + (["--ack-after-print"] if args.ack_after_print else [])
+            )
         elif args.command == "calendar":
             from live_transcript.integrations.calendar import main as reconcile
 

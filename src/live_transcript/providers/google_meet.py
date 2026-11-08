@@ -380,6 +380,10 @@ def run(argv=None):
                     initial_failure=navigation_failure,
                 )
                 print("JOINED Google Meet (Leave call confirmed)", flush=True)
+                if os.environ.get("LT_SESSION_MARKER"):
+                    Path(os.environ["LT_SESSION_MARKER"]).write_text(
+                        json.dumps(dict(utc=time.time(), provider="google"))
+                    )
                 print(
                     "ADMISSION_SUCCEEDED "
                     + json.dumps(

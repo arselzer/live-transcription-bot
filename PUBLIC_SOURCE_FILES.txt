@@ -73,6 +73,7 @@ src/live_transcript/transcription/__init__.py
 src/live_transcript/transcription/audio_quality.py
 src/live_transcript/transcription/batch.py
 src/live_transcript/transcription/daemon.py
+src/live_transcript/transcription/dedup.py
 src/live_transcript/transcription/diarize.py
 src/live_transcript/transcription/quality.py
 src/live_transcript/transcription/router.py

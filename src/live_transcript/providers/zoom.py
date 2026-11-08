@@ -673,6 +673,12 @@ def main(name_retry_allowed=False, absolute_deadline=None):
 
         from live_transcript.capture.guard import Archive, event
 
+        if os.environ.get("LT_SESSION_MARKER"):
+            from pathlib import Path as _Path
+
+            _Path(os.environ["LT_SESSION_MARKER"]).write_text(
+                json.dumps(dict(utc=time.time(), provider="zoom"))
+            )
         print("ADMISSION_SUCCEEDED " + json.dumps(dict(name=a.name)), flush=True)
         archive = Archive(out)
         archive_started = time.time()

@@ -336,6 +336,10 @@ def run(argv=None):
                 print(
                     "JOINED Proton Meet (in-call toolbar and Leave Meeting confirmed)", flush=True
                 )
+                if os.environ.get("LT_SESSION_MARKER"):
+                    Path(os.environ["LT_SESSION_MARKER"]).write_text(
+                        json.dumps(dict(utc=time.time(), provider="proton"))
+                    )
                 t0 = time.monotonic()
                 started = time.time()
                 (VM_HOME / "rec" / "speakers.jsonl").write_text("")

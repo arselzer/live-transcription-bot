@@ -73,6 +73,7 @@ include src/live_transcript/transcription/__init__.py
 include src/live_transcript/transcription/audio_quality.py
 include src/live_transcript/transcription/batch.py
 include src/live_transcript/transcription/daemon.py
+include src/live_transcript/transcription/dedup.py
 include src/live_transcript/transcription/diarize.py
 include src/live_transcript/transcription/quality.py
 include src/live_transcript/transcription/router.py
