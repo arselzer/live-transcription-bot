@@ -62,8 +62,33 @@ fragments do not appear in ordinary HTTP request URLs. Authentication exchanges
 the token for an HttpOnly, SameSite=Strict session cookie. API, noVNC assets, and
 WebSocket connections require it. Host and Origin checks protect mutations and
 WebSocket upgrades. Runtime files and event feeds are private to the host user.
-Each console uses a different cookie name: browser cookies do not isolate TCP
-ports, so multiple VM consoles on one VPN hostname must not share a login cookie.
+The default `isolated` mode gives each console a separate login and cookie.
+Use shared mode for one login across participating VM consoles:
+
+```toml
+[console]
+login_mode = "shared"
+shared_login_file = "~/.config/live-transcript/console-login.json"
+session_seconds = 7200
+```
+
+Put those settings in each participating host profile. The tool creates the
+owner-only credentials file on first use; concurrent console starts reuse the
+same credentials. Log in through one full console link, then open the other
+consoles on the **same hostname**, even on different ports, without another token
+or VNC password. The authenticated session endpoint supplies each VM's current
+VNC password. Reconnect refreshes it after a viewer restart. Different filenames
+create separate login groups; `login_mode = "isolated"` keeps logins independent.
+
+Shared credentials grant access to every participating console, including its
+configured keyboard/mouse controls. Use the same session duration within a
+group. Signed browser sessions expire on the server as well as in the browser;
+the duration is 60–86400 seconds. A full capability link can authenticate again.
+Credentials stay on the host and are never copied into the browser VM or source
+repository. Keep the credentials file and its lock owner-only, and its parent
+directory not writable by other users. Invalid files fail without replacement.
+To revoke a group, stop its console commands, remove or move the private file,
+and restart them to generate a new key. Meeting capture stays independent.
 
 Default binding is `127.0.0.1`. `--listen 0.0.0.0 --advertise-host console.example`
 is an explicit trusted-VPN choice. The built-in listener is HTTP. Do not expose

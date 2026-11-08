@@ -38,6 +38,14 @@ cpu_small = "whisper-stt-cpu-small.service"
 [audio]
 sink = "transcript"
 
+[console]
+# "isolated": a separate login for every console (default).
+# "shared": one browser login for consoles using the same private host file.
+login_mode = "isolated"
+# Required in shared mode. Point every participating profile at the same file.
+# shared_login_file = "~/.config/live-transcript/console-login.json"
+session_seconds = 7200
+
 [google]
 # Native X11 input requires xdotool+xclip in the dedicated browser VM.
 input_mode = "native"

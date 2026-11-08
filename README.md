@@ -79,6 +79,12 @@ recording health, available storage, speech queue/signal status, and activity.
 Select the destination field in the VM, then paste into the side panel; it never
 sends an Enter key. Node is needed only when rebuilding the UI, not to run it.
 
+For one login across VM consoles, set `[console] login_mode = "shared"` and the
+same `shared_login_file` in their host profiles. After logging in once, other
+consoles on that hostname open without another token or VNC password. The
+default `isolated` mode keeps separate logins. See
+[console authentication](docs/operator-console.md#access-and-deployment).
+
 The listener defaults to loopback. Explicit external binding is intended for a
 trusted VPN; use a TLS reverse proxy for an untrusted network. Leave the console
 command running, or supervise it independently. Closing the viewer does not stop

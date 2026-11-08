@@ -6,6 +6,9 @@ neither HTTP clients nor clipboard text can select a command or target host.
 """
 
 from collections import deque
+import fcntl
+import hashlib
+import hmac
 from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
@@ -13,9 +16,11 @@ import json
 import os
 from pathlib import Path
 import secrets
+import re
 import select
 import shlex
 import socket
+import stat
 import subprocess
 import threading
 import time
@@ -23,6 +28,103 @@ from urllib.parse import urlsplit, urlencode
 
 
 MAX_BODY = 96 * 1024
+
+
+class ConsoleAuth:
+    """Optional shared login group with signed, server-expiring browser sessions."""
+
+    def __init__(self, mode="isolated", shared_file="", session_seconds=7200):
+        if (
+            mode not in ("isolated", "shared")
+            or type(session_seconds) is not int
+            or not 60 <= session_seconds <= 86400
+        ):
+            raise ValueError("Invalid console authentication settings")
+        self.mode, self.session_seconds = mode, session_seconds
+        data = self.new_credentials()
+        if mode == "shared":
+            if not shared_file:
+                raise ValueError("Shared console login requires a private credentials file")
+            path = Path(shared_file).expanduser().absolute()
+            path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            parent = path.parent.stat()
+            if parent.st_uid != os.getuid() or parent.st_mode & 0o022:
+                raise ValueError(
+                    "Shared console login directory must be owned and not writable by others"
+                )
+            lock_fd = os.open(str(path) + ".lock", os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW, 0o600)
+            with os.fdopen(lock_fd, "r+") as lock:
+                self.check_private(lock.fileno())
+                fcntl.flock(lock, fcntl.LOCK_EX)
+                try:
+                    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                except FileNotFoundError:
+                    from live_transcript.core.files import atomic_json
+
+                    atomic_json(path, data)
+                    descriptor = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(descriptor, "r") as source:
+                    self.check_private(source.fileno())
+                    data = json.loads(source.read(4097))
+                if (
+                    not isinstance(data, dict)
+                    or data.get("version") != 1
+                    or any(
+                        not isinstance(data.get(key), str) or not re.fullmatch(pattern, data[key])
+                        for key, pattern in (
+                            ("token", r"[A-Za-z0-9_-]{43}"),
+                            ("session_key", r"[A-Za-z0-9_-]{43}"),
+                            ("group", r"[a-f0-9]{16}"),
+                        )
+                    )
+                ):
+                    raise ValueError("Invalid shared console login file")
+        self.token = data["token"]
+        self.session_key = data["session_key"].encode()
+        self.cookie_name = "lt_console_" + data["group"]
+
+    @staticmethod
+    def new_credentials():
+        return dict(
+            version=1,
+            token=secrets.token_urlsafe(32),
+            session_key=secrets.token_urlsafe(32),
+            group=secrets.token_hex(8),
+        )
+
+    @staticmethod
+    def check_private(descriptor):
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.getuid()
+            or details.st_mode & 0o077
+            or details.st_size > 4096
+        ):
+            raise ValueError("Console login files must be regular, owner-only files")
+
+    def issue(self):
+        issued = int(time.time())
+        payload = f"{issued}.{issued + self.session_seconds}.{secrets.token_hex(8)}"
+        signature = hmac.new(self.session_key, payload.encode(), hashlib.sha256).hexdigest()
+        return payload + "." + signature
+
+    def accepts(self, value):
+        if not isinstance(value, str) or not re.fullmatch(
+            r"\d{1,12}\.\d{1,12}\.[a-f0-9]{16}\.[a-f0-9]{64}", value
+        ):
+            return False
+        issued, expires, nonce, signature = value.split(".")
+        now = time.time()
+        if not (
+            int(issued) <= now + 30
+            and now < int(expires)
+            and 60 <= int(expires) - int(issued) <= 86400
+        ):
+            return False
+        payload = ".".join((issued, expires, nonce))
+        expected = hmac.new(self.session_key, payload.encode(), hashlib.sha256).hexdigest()
+        return secrets.compare_digest(signature, expected)
 
 
 class EventFeed:
@@ -103,14 +205,20 @@ class OperatorServer(ThreadingHTTPServer):
     daemon_threads = True
     allow_reuse_address = True
 
-    def __init__(self, address, upstream, bridge, events, advertised_host):
+    def __init__(
+        self, address, upstream, bridge, events, advertised_host, *, auth=None, viewer_password=""
+    ):
+        from live_transcript.core.config import get
+
         self.upstream = ("127.0.0.1", upstream)
         self.bridge, self.events = bridge, events
-        self.token = secrets.token_urlsafe(32)
-        self.cookie = secrets.token_urlsafe(32)
-        # Browser cookies are scoped to hosts/paths, not TCP ports. Independent
-        # VM consoles on the same VPN host must not overwrite each other's login.
-        self.cookie_name = "lt_console_" + secrets.token_hex(8)
+        self.auth = auth or ConsoleAuth(
+            get("console", "login_mode"),
+            get("console", "shared_login_file"),
+            get("console", "session_seconds"),
+        )
+        self.token, self.cookie_name = self.auth.token, self.auth.cookie_name
+        self.viewer_password = viewer_password
         self.cached_status = None
         self.status_lock = threading.Lock()
         self.last_capture_state = None
@@ -183,6 +291,11 @@ class OperatorServer(ThreadingHTTPServer):
             self.cached_status = (time.monotonic(), value)
             return value
 
+    def session(self):
+        return dict(
+            authenticated=True, viewer_password=self.viewer_password, login_mode=self.auth.mode
+        )
+
 
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.1"
@@ -217,8 +330,8 @@ class Handler(BaseHTTPRequestHandler):
     def authenticated(self):
         try:
             cookie = SimpleCookie(self.headers.get("Cookie", ""))
-            return self.server.cookie_name in cookie and secrets.compare_digest(
-                cookie[self.server.cookie_name].value, self.server.cookie
+            return self.server.cookie_name in cookie and self.server.auth.accepts(
+                cookie[self.server.cookie_name].value
             )
         except Exception:
             return False
@@ -254,12 +367,12 @@ class Handler(BaseHTTPRequestHandler):
                     token.encode(), self.server.token.encode()
                 ):
                     return self.reply(401, dict(error="Open the full private console link"))
-                response = b'{"authenticated":true}'
+                response = json.dumps(self.server.session()).encode()
                 self.send_response(200)
                 self.headers_safe()
                 self.send_header(
                     "Set-Cookie",
-                    f"{self.server.cookie_name}={self.server.cookie}; Path=/; HttpOnly; SameSite=Strict; Max-Age=7200",
+                    f"{self.server.cookie_name}={self.server.auth.issue()}; Path=/; HttpOnly; SameSite=Strict; Max-Age={self.server.auth.session_seconds}",
                 )
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))
@@ -319,6 +432,10 @@ class Handler(BaseHTTPRequestHandler):
             }[name]
             return self.reply(
                 200, files("live_transcript").joinpath("operator_ui", name).read_bytes(), mime
+            )
+        if path == "/api/session":
+            return self.reply(
+                200, self.server.session() if self.authenticated() else dict(authenticated=False)
             )
         if not self.authenticated():
             return self.reply(401, dict(error="Console session expired; reopen its link"))
@@ -383,7 +500,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.wfile.flush()
                 self.connection.settimeout(10)
                 upstream.settimeout(10)
-                while not self.server.monitor_stop.is_set():
+                while not self.server.monitor_stop.is_set() and self.authenticated():
                     ready, _, _ = select.select([self.connection, upstream], [], [], 5)
                     if not ready:
                         continue
@@ -396,11 +513,15 @@ class Handler(BaseHTTPRequestHandler):
             pass
 
 
-def launch_ui(listen, port, advertised, upstream, bridge, event_path, password, emit=None):
+def launch_ui(
+    listen, port, advertised, upstream, bridge, event_path, password, emit=None, *, auth=None
+):
     from live_transcript.runtime.console import process_stamp
 
     events = EventFeed(event_path, emit)
-    server = OperatorServer((listen, port), upstream, bridge, events, advertised)
+    server = OperatorServer(
+        (listen, port), upstream, bridge, events, advertised, auth=auth, viewer_password=password
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     url = f"http://{server.authority}/#" + urlencode(dict(token=server.token, password=password))
@@ -412,6 +533,7 @@ def launch_ui(listen, port, advertised, upstream, bridge, event_path, password, 
         url=url,
         event_file=str(events.path),
         expires_with_console=True,
+        login_mode=server.auth.mode,
         pid=os.getpid(),
         start_ticks=process_stamp(os.getpid()),
     )

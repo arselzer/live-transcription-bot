@@ -15,6 +15,7 @@ Explicit paths expand `~` and environment variables. Use absolute guest paths.
 | --- | --- |
 | `paths` | Data workspace, runtime directories, local model/VAD/binary, optional vault, archive destination/mount |
 | `vm` | SSH destination, libvirt name, IP, guest home, whether automatic libvirt start is allowed |
+| `console` | Isolated/shared login mode, private host credentials file, signed-session duration |
 | `caption` | Trusted interface/port, speech endpoint, cadence, silence threshold and finalization delay |
 | `asr` | CPU fallback/adaptation, endpoint timeouts, backlog/throughput thresholds, GPU/CPU device settings |
 | `model` | Local OpenAI-compatible chat endpoint and served model name |

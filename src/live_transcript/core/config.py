@@ -63,6 +63,7 @@ DEFAULTS = {
     "audio": {"sink": "transcript"},
     "google": {"input_mode": "native", "admission_timeout": 330.0},
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
+    "console": {"login_mode": "isolated", "shared_login_file": "", "session_seconds": 7200},
     "caption": {
         "host": "127.0.0.1",
         "bind": "127.0.0.1",
@@ -162,6 +163,19 @@ def load(path=None):
     for key, value in config["paths"].items():
         if value:
             config["paths"][key] = os.path.abspath(os.path.expandvars(os.path.expanduser(value)))
+    console = config["console"]
+    if console["login_mode"] not in ("isolated", "shared"):
+        raise ValueError("console.login_mode must be isolated or shared")
+    if type(console["session_seconds"]) is not int or not 60 <= console["session_seconds"] <= 86400:
+        raise ValueError("console.session_seconds must be an integer between 60 and 86400")
+    if console["shared_login_file"]:
+        console["shared_login_file"] = os.path.abspath(
+            os.path.expandvars(os.path.expanduser(console["shared_login_file"]))
+        )
+        if any(ord(c) < 32 for c in console["shared_login_file"]):
+            raise ValueError("invalid console.shared_login_file")
+    if console["login_mode"] == "shared" and not console["shared_login_file"]:
+        raise ValueError("console.shared_login_file is required for shared login")
     vm = config["vm"]
     if not vm["python"] or vm["python"].startswith("-") or any(ord(c) < 32 for c in vm["python"]):
         raise ValueError("invalid VM python executable")

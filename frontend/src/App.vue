@@ -11,8 +11,8 @@ const text = ref(""),
   generation = ref(0),
   connected = ref(false);
 const fragment = new URLSearchParams(location.hash.slice(1));
-const token = fragment.get("token") || "",
-  password = fragment.get("password") || "";
+const token = fragment.get("token") || "";
+const password = ref(fragment.get("password") || "");
 const authenticated = ref(false);
 const now = ref(Date.now()),
   lastStatusAt = ref(0);
@@ -26,7 +26,7 @@ const viewerUrl = computed(
     new URLSearchParams({
       autoconnect: "1",
       resize: "scale",
-      password,
+      password: password.value,
       path: "novnc/websockify",
       show_dot: "1",
     }),
@@ -70,7 +70,8 @@ async function api(path, data, retry = true) {
   });
   const result = await r.json();
   if (r.status === 401 && path !== "session" && token && retry) {
-    await api("session", { token });
+    const session = await api("session", { token });
+    password.value = session.viewer_password || password.value;
     reconnect();
     return api(path, data, false);
   }
@@ -138,9 +139,19 @@ function attachViewer() {
     attributeFilter: ["class"],
   });
 }
-function reconnect() {
+async function reconnect() {
   connected.value = false;
-  generation.value++;
+  try {
+    let session = await api("session");
+    if (!session.authenticated && token)
+      session = await api("session", { token });
+    if (!session.authenticated)
+      throw new Error("Open a private console login link first.");
+    password.value = session.viewer_password || password.value;
+    generation.value++;
+  } catch (e) {
+    error.value = e.message;
+  }
 }
 function fullscreen() {
   viewer.value?.requestFullscreen?.().catch(() => {
@@ -149,7 +160,12 @@ function fullscreen() {
 }
 async function connect() {
   try {
-    await api("session", { token });
+    let session = await api("session");
+    if (!session.authenticated) {
+      if (!token) throw new Error("Open a private console login link first.");
+      session = await api("session", { token });
+    }
+    password.value = session.viewer_password || password.value;
     authenticated.value = true;
     await refresh();
   } catch (e) {

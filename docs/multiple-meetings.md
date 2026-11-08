@@ -27,6 +27,10 @@ running when recognition falls behind, and report that delay explicitly.
 Each profile has its own console. Choose a different host port for each. The
 current UI controls one VM; it is not yet a fleet dashboard or a multi-user
 tenancy system.
+Set `console.login_mode = "shared"` and the same `console.shared_login_file` in
+each profile to use one login across those consoles. Different files create
+separate groups; isolated mode preserves separate logins. See
+[console authentication](operator-console.md#access-and-deployment).
 
 ## Next architecture layer
 

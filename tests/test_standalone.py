@@ -21,6 +21,10 @@ class ConfigurationTests(unittest.TestCase):
             '[recovery]\nenabled="yes"',
             '[vm]\nssh="-oProxyCommand=bad"',
             "[recovery]\nmax_actions_5min=1.5",
+            '[console]\nlogin_mode="unknown"',
+            '[console]\nlogin_mode="shared"',
+            "[console]\nsession_seconds=59",
+            "[console]\nsession_seconds=86401",
         ):
             with self.subTest(text=text), tempfile.TemporaryDirectory() as d:
                 path = Path(d) / "config.toml"
@@ -45,6 +49,19 @@ class ConfigurationTests(unittest.TestCase):
             self.assertNotIn("vault", path.read_text())
             self.assertNotIn("url_file", path.read_text())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+
+    def test_guest_export_omits_shared_host_login_configuration(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guest.toml"
+            private = dict(
+                login_mode="shared",
+                shared_login_file=str(Path(directory) / "host-login.json"),
+                session_seconds=7200,
+            )
+            with patch.dict(runtime_config.CONFIG, {"console": private}):
+                runtime_config.write_vm_config(path)
+            self.assertNotIn("host-login.json", path.read_text())
+            self.assertEqual(runtime_config.load(path)["console"]["login_mode"], "isolated")
 
     def test_cli_config_without_hermes_and_alternate_deployment(self):
         with tempfile.TemporaryDirectory() as d:

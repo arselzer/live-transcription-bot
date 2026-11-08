@@ -13,7 +13,7 @@ from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
 from live_transcript.runtime.console import guest_action, viewer_url, read_handshake, start_desktop
-from live_transcript.runtime.operator import EventFeed, OperatorServer
+from live_transcript.runtime.operator import ConsoleAuth, EventFeed, OperatorServer
 from live_transcript.runtime.operator import console_notifications
 
 
@@ -103,6 +103,49 @@ class ConsoleHTTPTests(unittest.TestCase):
         )
         self.assertEqual(self.request("GET", "/", host="attacker.invalid")[0], 403)
         self.bridge.call.assert_not_called()
+
+    def test_shared_login_opens_another_vm_without_its_token_or_password(self):
+        file = Path(self.temp.name) / "shared/login.json"
+        a, b = ConsoleAuth("shared", file), ConsoleAuth("shared", file)
+        self.server.auth = a
+        self.server.token, self.server.cookie_name = a.token, a.cookie_name
+        second = OperatorServer(
+            ("127.0.0.1", 0),
+            1,
+            self.bridge,
+            EventFeed(Path(self.temp.name) / "shared.events.jsonl"),
+            "127.0.0.1",
+            auth=b,
+            viewer_password="second-vnc",
+        )
+        threading.Thread(target=second.serve_forever, daemon=True).start()
+        browser = urllib.request.build_opener(
+            urllib.request.HTTPCookieProcessor(http.cookiejar.CookieJar())
+        )
+        try:
+            origin = "http://" + self.server.authority
+            request = urllib.request.Request(
+                origin + "/api/session",
+                data=json.dumps(dict(token=a.token)).encode(),
+                headers={"Content-Type": "application/json", "Origin": origin},
+            )
+            with browser.open(request, timeout=3) as response:
+                self.assertTrue(json.load(response)["authenticated"])
+            with browser.open("http://" + second.authority + "/api/session", timeout=3) as response:
+                data = json.load(response)
+                self.assertTrue(data["authenticated"])
+                self.assertEqual(data["viewer_password"], "second-vnc")
+            with browser.open("http://" + second.authority + "/api/status", timeout=3) as response:
+                self.assertEqual(response.status, 200)
+        finally:
+            second.shutdown()
+            second.server_close()
+
+    def test_session_probe_keeps_vnc_password_private_until_login(self):
+        self.server.viewer_password = "private-vnc-fixture"
+        code, _, body = self.request("GET", "/api/session")
+        self.assertEqual(code, 200)
+        self.assertEqual(json.loads(body), dict(authenticated=False))
 
     def test_paste_is_forwarded_without_persisting_its_contents(self):
         cookie = self.login()
@@ -347,6 +390,73 @@ class HermesConsoleTests(unittest.TestCase):
                 patch("live_transcript.runtime.console.process_stamp", return_value="fixture"),
             ):
                 self.assertEqual(len(console_notifications({})), 1)
+
+
+class ConsoleAuthTests(unittest.TestCase):
+    def test_shared_credentials_persist_and_other_groups_reject_the_session(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "group.json"
+            a, b = ConsoleAuth("shared", file), ConsoleAuth("shared", file)
+            other = ConsoleAuth("shared", Path(directory) / "other.json")
+            self.assertEqual(a.token, b.token)
+            self.assertEqual(a.cookie_name, b.cookie_name)
+            self.assertTrue(b.accepts(a.issue()))
+            self.assertFalse(other.accepts(a.issue()))
+            self.assertFalse(ConsoleAuth().accepts(a.issue()))
+            self.assertEqual(file.stat().st_mode & 0o777, 0o600)
+
+    def test_sessions_expire_and_modified_signatures_are_rejected(self):
+        auth = ConsoleAuth(session_seconds=60)
+        with patch("time.time", return_value=1000):
+            cookie = auth.issue()
+            self.assertTrue(auth.accepts(cookie))
+            self.assertFalse(auth.accepts(cookie[:-1] + ("0" if cookie[-1] != "0" else "1")))
+        with patch("time.time", return_value=1060):
+            self.assertFalse(auth.accepts(cookie))
+        with patch("time.time", return_value=900):
+            self.assertFalse(auth.accepts(cookie))
+        for value in ("", "bad", "你好", None):
+            self.assertFalse(auth.accepts(value))
+
+    def test_unsafe_credentials_are_not_overwritten(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "login.json"
+            file.write_text("private fixture")
+            file.chmod(0o644)
+            with self.assertRaises(ValueError):
+                ConsoleAuth("shared", file)
+            self.assertEqual(file.read_text(), "private fixture")
+            file.chmod(0o600)
+            with self.assertRaises(ValueError):
+                ConsoleAuth("shared", file)
+            link = Path(directory) / "link.json"
+            link.symlink_to(file)
+            with self.assertRaises(OSError):
+                ConsoleAuth("shared", link)
+            fifo = Path(directory) / "fifo.json"
+            os.mkfifo(fifo, 0o600)
+            with self.assertRaises(ValueError):
+                ConsoleAuth("shared", fifo)
+
+    def test_concurrent_group_creation_uses_one_set_of_credentials(self):
+        from concurrent.futures import ThreadPoolExecutor
+
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "login.json"
+            with ThreadPoolExecutor(max_workers=4) as pool:
+                logins = list(pool.map(lambda _: ConsoleAuth("shared", file), range(8)))
+            self.assertEqual(len({a.token for a in logins}), 1)
+            self.assertTrue(all(a.accepts(logins[0].issue()) for a in logins))
+
+    def test_rotating_the_private_file_invalidates_old_sessions_on_restart(self):
+        with tempfile.TemporaryDirectory() as directory:
+            file = Path(directory) / "login.json"
+            old = ConsoleAuth("shared", file)
+            cookie = old.issue()
+            file.unlink()
+            new = ConsoleAuth("shared", file)
+            self.assertNotEqual(old.token, new.token)
+            self.assertFalse(new.accepts(cookie))
 
 
 if __name__ == "__main__":

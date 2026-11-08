@@ -476,6 +476,15 @@ def open_console(args, emit):
         raise ValueError("Set --advertise-host when listening on 0.0.0.0")
     advertised = (args.advertise_host or args.listen).lower()
     viewer_url(advertised, args.port or 1, "validation")
+    from live_transcript.runtime.operator import ConsoleAuth
+
+    # Validate/create host login credentials before acquiring a VM console or
+    # creating a diagnostic desktop. A bad login configuration must not reserve it.
+    auth = ConsoleAuth(
+        get("console", "login_mode"),
+        get("console", "shared_login_file"),
+        get("console", "session_seconds"),
+    )
     root = Path(get("paths", "logs"))
     root.mkdir(parents=True, exist_ok=True, mode=0o700)
     token = uuid.uuid4().hex
@@ -567,6 +576,7 @@ def open_console(args, emit):
                     root / ("console-" + token + ".events.jsonl"),
                     data["password"],
                     emit,
+                    auth=auth,
                 )
                 emit(
                     dict(
