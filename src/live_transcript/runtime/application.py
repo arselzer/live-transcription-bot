@@ -255,6 +255,21 @@ def command(row):
             "console",
             *row["arguments"],
         ]
+    if row["kind"] == "recover":
+        if len(row["arguments"]) != 3 or row["arguments"][0] != get("vm", "ssh"):
+            raise ValueError("Recovery job does not match the configured VM")
+        # The public CLI maps failed retrieval/processing checkpoints to a
+        # nonzero exit. The legacy internal worker doesn't report that result.
+        return [
+            sys.executable,
+            "-u",
+            "-m",
+            "live_transcript",
+            "--json",
+            "recover",
+            row["arguments"][2],
+            row["arguments"][1],
+        ]
     return worker(row["kind"], *row["arguments"])
 
 

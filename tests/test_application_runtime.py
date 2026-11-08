@@ -160,6 +160,41 @@ class ApplicationTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0)
         self.assertIn("--advertise-host", result.stdout)
 
+    def test_recovery_worker_uses_the_cli_result_contract_and_pinned_vm(self):
+        from contextlib import redirect_stdout
+        import io
+        from live_transcript.cli import main
+
+        row = dict(kind="recover", arguments=[config.get("vm", "ssh"), "fixture.wav", "--help"])
+        result = subprocess.run(
+            app.command(row), env=self.env, capture_output=True, text=True, timeout=5
+        )
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("guest_wav", result.stdout)
+        row["arguments"][0] = "other@192.0.2.21"
+        with self.assertRaises(ValueError):
+            app.command(row)
+        with (
+            patch.dict(os.environ, dict(self.env, LT_APPLICATION_JOB="fixture")),
+            patch(
+                "live_transcript.storage.worker.run", return_value=dict(status="postprocess_failed")
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(
+                main(
+                    [
+                        "--config",
+                        self.env["LIVE_TRANSCRIPT_CONFIG"],
+                        "--json",
+                        "recover",
+                        "owned-fixture",
+                        "fixture.wav",
+                    ]
+                ),
+                1,
+            )
+
     def test_calendar_restart_adopts_committed_launch_without_rejoining(self):
         from live_transcript.integrations import calendar_dispatch, calendar
 
