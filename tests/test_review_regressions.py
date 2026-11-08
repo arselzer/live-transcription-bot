@@ -91,7 +91,7 @@ class ContractTests(unittest.TestCase):
             json.loads(output.getvalue())["admission_diagnostics"], "/example/diagnostics"
         )
 
-    def test_doctor_checks_disk_without_creating_a_new_workspace(self):
+    def test_check_checks_disk_without_creating_a_new_workspace(self):
         from unittest.mock import MagicMock
 
         with tempfile.TemporaryDirectory() as directory:
@@ -112,7 +112,7 @@ class ContractTests(unittest.TestCase):
                 patch.object(cli.urllib.request, "urlopen", side_effect=OSError("isolated")),
                 patch.object(cli.subprocess, "run", return_value=MagicMock(stdout="{}")),
             ):
-                report = cli.doctor()
+                report = cli.check_readiness()
             self.assertIn("host disk reserve", [row["name"] for row in report["checks"]])
             self.assertFalse(workspace.exists())
 

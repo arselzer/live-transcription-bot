@@ -14,6 +14,20 @@ from tools.benchmark_audio_conditions import transform
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_check_command_uses_readiness_validation(self):
+        import io
+        from contextlib import redirect_stdout
+        from live_transcript import cli
+
+        output = io.StringIO()
+        with (
+            patch.object(cli, "check_readiness", return_value=dict(ok=True)) as readiness,
+            redirect_stdout(output),
+        ):
+            self.assertEqual(cli.main(["--json", "check", "--recording-only"]), 0)
+        readiness.assert_called_once_with(recording_only=True)
+        self.assertTrue(json.loads(output.getvalue())["ok"])
+
     def test_recording_only_preflight_does_not_claim_speech_is_ready(self):
         from live_transcript import cli
 
@@ -37,7 +51,7 @@ class ConfigurationTests(unittest.TestCase):
             patch.object(cli, "current", return_value=dict(status="idle")),
             patch.object(cli, "runtime_info", return_value={}),
         ):
-            result = cli.doctor(recording_only=True)
+            result = cli.check_readiness(recording_only=True)
         self.assertTrue(result["ok"])
         self.assertTrue(result["recording_ready"])
         self.assertFalse(result["transcription_ready"])
@@ -174,7 +188,9 @@ class NotificationHandoffTests(unittest.TestCase):
         ):
             result = watchdog.ensure_backend()
         self.assertTrue(result)
-        self.assertTrue(all("deferred by systemd conditions" in message for message in result.values()))
+        self.assertTrue(
+            all("deferred by systemd conditions" in message for message in result.values())
+        )
         self.assertTrue(all(call.args[0][0] == "systemctl" for call in calls.call_args_list))
         self.assertFalse(any("restart" in call.args[0] for call in calls.call_args_list))
 
@@ -235,6 +251,8 @@ class NotificationHandoffTests(unittest.TestCase):
             '{"issues":{"audio":[]}}',
             '{"notifications":{"bad":{}}}',
             '{"rejoins":{"incident":-1}}',
+            '{"edge":[]}',
+            '{"edge":{"backend":"invalid"}}',
         ):
             with self.subTest(content=content):
                 self.path.write_text(content)

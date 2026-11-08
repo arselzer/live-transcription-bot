@@ -111,12 +111,14 @@ def remote_status(meeting):
     if result.returncode:
         return dict(phase="unknown", reason="VM control unreachable; capture may still be running")
     value = json.loads(result.stdout)
+    if not isinstance(value, dict):
+        raise ValueError("VM replied with an invalid session status")
     if value.get("token") != token:
         raise ValueError("VM replied with a different session token")
     return value
 
 
-def doctor(*, recording_only=False):
+def check_readiness(*, recording_only=False):
     """Read-only preflight. Never load another model or touch archive storage."""
     from live_transcript.core.config import get, ssh_options
 
@@ -300,7 +302,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", help="TOML configuration file")
     parser.add_argument(
-        "--json", action="store_true", help="structured output for status/doctor/config/verify"
+        "--json", action="store_true", help="structured output for status/check/config/verify"
     )
     parser.add_argument("--version", action="version", version="live-transcript 0.1.0")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -311,9 +313,9 @@ def main(argv=None):
             "setup", help="provision a standalone installation and isolated browser VM"
         )
     )
-    for name in ("doctor", "status", "config", "info"):
+    for name in ("check", "status", "config", "info"):
         command = commands.add_parser(name)
-        if name == "doctor":
+        if name == "check":
             command.add_argument(
                 "--recording-only",
                 action="store_true",
@@ -438,8 +440,10 @@ def main(argv=None):
             from live_transcript.integrations.notifications import pending, acknowledge
 
             emit(acknowledge(args.ack) if args.ack else pending(args.limit), args.json)
-        elif args.command == "doctor":
-            result = doctor(recording_only=True) if args.recording_only else doctor()
+        elif args.command == "check":
+            result = (
+                check_readiness(recording_only=True) if args.recording_only else check_readiness()
+            )
             emit(result, args.json)
             return 0 if result["ok"] else 1
         elif args.command == "status":

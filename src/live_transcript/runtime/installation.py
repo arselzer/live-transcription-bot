@@ -649,7 +649,7 @@ class Installation:
                         vm=self.options["vm_name"],
                         recording_only=self.options["recording_only"],
                         next_command=shlex.join(
-                            ["live-transcript", "--config", str(self.profile), "doctor"]
+                            ["live-transcript", "--config", str(self.profile), "check"]
                         ),
                     )
             except Exception as exc:

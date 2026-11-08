@@ -158,3 +158,4 @@ include docs/hermes.md
 include docs/multiple-meetings.md
 include src/live_transcript/integrations/notifications.py
 include examples/hermes/SKILL.md
+include tests/test_dedup_announce_ack.py

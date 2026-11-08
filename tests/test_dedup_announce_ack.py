@@ -41,9 +41,10 @@ class StatusJoinedTests(unittest.TestCase):
             home = Path(d)
             token = "20261108-000000-abcdef"
             marker = home / "logs" / ("session-" + token + ".joined.json")
-            with patch.object(session, "HOME", home), patch.object(
-                session.subprocess, "run"
-            ) as run:
+            with (
+                patch.object(session, "HOME", home),
+                patch.object(session.subprocess, "run") as run,
+            ):
                 run.return_value = type("R", (), {"stdout": "active\n"})()
                 self.assertFalse(session.status(token)["joined"])
                 marker.parent.mkdir(parents=True, exist_ok=True)
@@ -75,14 +76,15 @@ class AnnounceTests(unittest.TestCase):
             self._meeting(mjson)
             remote = dict(
                 phase="running",
-                archive="/home/scribe/rec/tok-1.archive",
+                archive="/home/transcript/rec/tok-1.archive",
                 joined=True,
             )
             state = {}
-            with patch.object(watchdog, "MJSON", mjson), patch.object(
-                watchdog, "probe", return_value=remote
-            ), patch.object(watchdog, "pending_alive", return_value=False), patch.object(
-                watchdog, "decision", return_value="wait"
+            with (
+                patch.object(watchdog, "MJSON", mjson),
+                patch.object(watchdog, "probe", return_value=remote),
+                patch.object(watchdog, "pending_alive", return_value=False),
+                patch.object(watchdog, "decision", return_value="wait"),
             ):
                 issues = watchdog.tick(state)
                 self.assertIn("recording-started", issues)
@@ -100,81 +102,86 @@ class AnnounceTests(unittest.TestCase):
             self._meeting(mjson)
             remote = dict(
                 phase="running",
-                archive="/home/scribe/rec/tok-1.archive",
+                archive="/home/transcript/rec/tok-1.archive",
                 joined=True,
             )
             state = {}
-            with patch.object(watchdog, "MJSON", mjson), patch.object(
-                watchdog, "probe", return_value=remote
-            ), patch.object(watchdog, "pending_alive", return_value=False), patch.object(
-                watchdog, "decision", return_value="wait"
+            with (
+                patch.object(watchdog, "MJSON", mjson),
+                patch.object(watchdog, "probe", return_value=remote),
+                patch.object(watchdog, "pending_alive", return_value=False),
+                patch.object(watchdog, "decision", return_value="wait"),
             ):
                 self.assertNotIn("recording-started", watchdog.tick(state, True))
                 self.assertIn("recording-started", watchdog.tick(state, False))
 
 
 class AckAfterPrintTests(unittest.TestCase):
-    def test_main_acks_notifications_after_print(self):
+    def run_watchdog(self, arguments, path, *, broken_output=False):
+        import io
+        from contextlib import redirect_stdout
         from live_transcript.runtime import watchdog
-        from live_transcript.integrations import notifications
 
-        with tempfile.TemporaryDirectory() as d:
-            state_path = Path(d) / "watchdog.json"
-            report = dict(
-                version=1,
-                dry_run=False,
-                issues={},
-                messages=["Live Transcript [x]: y"],
-                notifications=[dict(id="a" * 64, message="Live Transcript [x]: y")],
-                pending_count=1,
-                delivery="unacknowledged",
-            )
-            with patch.object(watchdog, "STATE", state_path), patch.object(
-                watchdog, "ensure_backend", return_value={}
-            ), patch.object(watchdog, "tick", return_value={}), patch.object(
-                watchdog, "recovery_issues", return_value={}
-            ), patch.object(
-                watchdog, "deliver", return_value=report
-            ), patch(
-                "live_transcript.runtime.operator.console_notifications", return_value={}
-            ), patch.object(
-                notifications, "apply_ack"
-            ) as ack:
-                watchdog.main(["--json", "--ack-after-print"])
-                ack.assert_called_once()
-                self.assertEqual(ack.call_args.args[1], ["a" * 64])
+        output = io.StringIO()
+        with (
+            patch.object(watchdog, "STATE", path),
+            patch.object(watchdog, "ensure_backend", return_value={}),
+            patch.object(watchdog, "tick", return_value={"fixture": "A test incident"}),
+            patch.object(watchdog, "recovery_issues", return_value={}),
+            patch("live_transcript.runtime.operator.console_notifications", return_value={}),
+            redirect_stdout(output),
+        ):
+            if broken_output:
+                with patch("builtins.print", side_effect=BrokenPipeError):
+                    with self.assertRaises(BrokenPipeError):
+                        watchdog.main(arguments)
+            else:
+                watchdog.main(arguments)
+        return json.loads(output.getvalue()) if output.getvalue() else None
+
+    def test_main_acks_notifications_after_print(self):
+        from live_transcript.integrations.notifications import load_state
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "watchdog.json"
+            report = self.run_watchdog(["--json", "--ack-after-print"], path)
+            state = load_state(path)
+            self.assertEqual(state["notifications"], {})
+            identifier = report["notifications"][0]["id"]
+            self.assertEqual(len(identifier), 32)
+            self.assertIn(identifier, state["notification_acks"])
 
     def test_no_flag_leaves_ledger_untouched(self):
-        from live_transcript.runtime import watchdog
-        from live_transcript.integrations import notifications
+        from live_transcript.integrations.notifications import load_state
 
-        with tempfile.TemporaryDirectory() as d:
-            state_path = Path(d) / "watchdog.json"
-            report = dict(
-                version=1,
-                dry_run=False,
-                issues={},
-                messages=[],
-                notifications=[dict(id="b" * 64, message="m")],
-                pending_count=1,
-                delivery="unacknowledged",
-            )
-            with patch.object(watchdog, "STATE", state_path), patch.object(
-                watchdog, "ensure_backend", return_value={}
-            ), patch.object(watchdog, "tick", return_value={}), patch.object(
-                watchdog, "recovery_issues", return_value={}
-            ), patch.object(
-                watchdog, "deliver", return_value=report
-            ), patch(
-                "live_transcript.runtime.operator.console_notifications", return_value={}
-            ), patch.object(
-                notifications, "apply_ack"
-            ) as ack:
-                watchdog.main(["--json"])
-                ack.assert_not_called()
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "watchdog.json"
+            report = self.run_watchdog(["--json"], path)
+            state = load_state(path)
+            self.assertIn(report["notifications"][0]["id"], state["notifications"])
+            self.assertFalse(state.get("notification_acks"))
+
+    def test_failed_print_preserves_pending_notifications_even_with_ack_flag(self):
+        from live_transcript.integrations.notifications import load_state
+
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "watchdog.json"
+            self.run_watchdog(["--json", "--ack-after-print"], path, broken_output=True)
+            state = load_state(path)
+            self.assertEqual(len(state["notifications"]), 1)
+            self.assertFalse(state.get("notification_acks"))
 
 
 class EdgeDeliveryTests(unittest.TestCase):
+    def setUp(self):
+        from live_transcript.runtime import watchdog
+
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        state = patch.object(watchdog, "STATE", Path(temporary.name) / "watchdog.json")
+        state.start()
+        self.addCleanup(state.stop)
+
     def test_steady_condition_announces_once_not_every_cooldown(self):
         from live_transcript.runtime.watchdog import deliver
 

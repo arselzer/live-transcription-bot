@@ -184,7 +184,7 @@ The November 6 deployment review exercised a newly created Ubuntu VM through
 kernel/browser installation, reboot, real microphone/sink capture, virtual camera
 frames and retrieval. It also resumed an interrupted bootstrap, repeated full
 setup, built the pinned native speech binaries and verified all model hashes.
-An isolated full CPU installation passed doctor and transcribed the pinned
+An isolated full CPU installation passed check and transcribed the pinned
 whisper.cpp speech sample; this is not a provider admission or accuracy benchmark.
 The sample took about 15 seconds for 11 seconds of input on that test host, so
 CPU-only live throughput must be measured rather than assumed.

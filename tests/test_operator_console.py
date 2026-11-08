@@ -221,6 +221,79 @@ class ConsoleHTTPTests(unittest.TestCase):
         self.server.status()
         self.assertEqual(self.events.recent()[-1]["kind"], "capture_attention")
 
+    def test_malformed_metrics_cannot_report_healthy_capture(self):
+        cases = [
+            [],
+            dict(capture=[]),
+            dict(capture=dict(age=float("nan"))),
+            dict(capture=dict(age=-1)),
+            dict(capture=dict(age=0, audio=[])),
+            dict(capture=dict(age=0, audio=dict(running="false"))),
+            dict(capture=dict(age=0, audio=dict(running=True, progress_age=None))),
+            dict(speech=dict(age=0, signal_flags={})),
+            dict(admission=[]),
+        ]
+        for value in cases:
+            with self.subTest(value=value):
+                self.server.cached_status = None
+                self.bridge.call.return_value = value
+                with self.assertRaises(ValueError):
+                    self.server.status()
+        self.assertNotIn("capture_healthy", [row["kind"] for row in self.events.recent()])
+
+    def test_cached_status_keeps_aging_without_mutating_its_snapshot(self):
+        self.bridge.call.return_value = dict(
+            capture=dict(
+                age=1,
+                elapsed=20,
+                audio=dict(running=True, progress_age=0),
+                screen=dict(running=True, progress_age=0),
+            ),
+            speech=dict(age=2, queued_audio_s=0, decode_error=False),
+        )
+        with patch("live_transcript.runtime.operator.time.monotonic", return_value=10):
+            original = self.server.status()
+            original["capture"]["age"] = 99
+        with patch("live_transcript.runtime.operator.time.monotonic", return_value=12):
+            reply = self.server.status()
+        self.assertEqual(reply["capture"]["age"], 3)
+        self.assertEqual(reply["capture"]["elapsed"], 22)
+        self.assertEqual(reply["speech"]["age"], 4)
+        self.assertEqual(self.server.cached_status[1]["capture"]["age"], 1)
+        self.assertEqual(self.bridge.call.call_count, 1)
+
+    def test_monitor_survives_bad_metrics_and_reports_recovery(self):
+        self.bridge.call.side_effect = [dict(capture=[]), dict(capture=None)]
+        waits = []
+
+        def next_poll(_):
+            waits.append(1)
+            if len(waits) == 2:
+                self.server.monitor_stop.set()
+
+        with patch.object(self.server.monitor_stop, "wait", side_effect=next_poll):
+            self.server.monitor()
+        kinds = [event["kind"] for event in self.events.recent()]
+        self.assertIn("vm_unreachable", kinds)
+        self.assertIn("vm_reconnected", kinds)
+
+    def test_cached_idle_status_remains_usable(self):
+        self.server.status()
+        self.assertIsNone(self.server.status()["capture"])
+
+    def test_activity_storage_failure_does_not_take_down_status(self):
+        with patch(
+            "live_transcript.runtime.operator.os.open", side_effect=OSError("storage unavailable")
+        ):
+            self.assertIsNone(self.server.status()["capture"])
+        self.assertIn("activity_storage_unavailable", [row["kind"] for row in self.events.recent()])
+        self.events.add("fixture", "A later status event")
+        self.assertIsNone(self.events.storage_error)
+
+    def test_disconnected_event_output_does_not_take_down_status(self):
+        self.events.emit = Mock(side_effect=BrokenPipeError)
+        self.assertIsNone(self.server.status()["capture"])
+
     def test_operator_events_never_include_request_content(self):
         cookie = self.login()
         self.request("POST", "/api/interaction", dict(text="not recorded"), cookie)

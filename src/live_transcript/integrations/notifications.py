@@ -34,9 +34,14 @@ def load_state(path):
         return {}
     if not isinstance(data, dict) or any(
         not isinstance(data.get(key, {}), dict)
-        for key in ("issues", "rejoins", "notifications", "notification_acks")
+        for key in ("issues", "rejoins", "notifications", "notification_acks", "edge")
     ):
         raise ValueError("Invalid watchdog state; retained without replacement")
+    if any(
+        not isinstance(value, str) or not re.fullmatch(r"[a-f0-9]{64}", value)
+        for value in data.get("edge", {}).values()
+    ):
+        raise ValueError("Invalid watchdog condition state; retained without replacement")
     for row in data.get("issues", {}).values():
         if (
             not isinstance(row, dict)
@@ -128,9 +133,7 @@ def apply_ack(state, identifiers, now=None):
     ``--ack-after-print`` hand-off, which already holds the state lock and must
     not re-acquire it.
     """
-    if not identifiers or any(
-        not re.fullmatch(r"[a-f0-9]{32}", value) for value in identifiers
-    ):
+    if not identifiers or any(not re.fullmatch(r"[a-f0-9]{32}", value) for value in identifiers):
         raise ValueError("Acknowledgement needs valid notification IDs")
     queued = state.setdefault("notifications", {})
     receipts = state.setdefault("notification_acks", {})

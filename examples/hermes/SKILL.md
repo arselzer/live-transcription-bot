@@ -14,8 +14,8 @@ meeting links, identities, paths, or messaging credentials.
 
 1. Run `live-transcript --config PROFILE --json info` and confirm the intended
    package, interpreter, profile, data root, and VM name.
-2. Run `doctor` and `--json status` with that profile. For an intentionally
-   recording-only installation use `doctor --recording-only`.
+2. Run `check` and `--json status` with that profile. For an intentionally
+   recording-only installation use `check --recording-only`.
 3. Preserve the complete invitation, including Zoom's password query or Proton's
    encryption fragment. Keep it out of public output and shell history.
 4. Start using `live-transcript --config PROFILE start 'INVITATION' --max-min N`.

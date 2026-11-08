@@ -6,6 +6,7 @@ neither HTTP clients nor clipboard text can select a command or target host.
 """
 
 from collections import deque
+from copy import deepcopy
 import fcntl
 import hashlib
 import hmac
@@ -13,6 +14,7 @@ from http.cookies import SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -28,6 +30,64 @@ from urllib.parse import urlsplit, urlencode
 
 
 MAX_BODY = 96 * 1024
+
+
+def validate_status(value):
+    """Keep malformed metrics from crashing the monitor or appearing healthy."""
+    if not isinstance(value, dict):
+        raise ValueError("VM status must be an object")
+    value = deepcopy(value)
+
+    def number(data, key, *, required=False):
+        if key not in data and not required:
+            return
+        item = data.get(key)
+        if type(item) not in (int, float) or not math.isfinite(item) or item < 0:
+            raise ValueError("VM status contains invalid metrics")
+
+    if "control" in value and type(value["control"]) is not bool:
+        raise ValueError("VM control status is unavailable")
+    capture = value.get("capture")
+    if capture is not None:
+        if not isinstance(capture, dict):
+            raise ValueError("Capture status must be an object")
+        number(capture, "age", required=True)
+        number(capture, "elapsed")
+        if capture.get("free_bytes") is not None:
+            number(capture, "free_bytes")
+        for key in ("audio", "screen", "snapshots"):
+            part = capture.get(key)
+            if part is None:
+                capture[key] = dict(running=False)
+                continue
+            if not isinstance(part, dict) or type(part.get("running", False)) is not bool:
+                raise ValueError("Capture writer status is unavailable")
+            number(part, "progress_age")
+    for key in ("speech", "admission"):
+        part = value.get(key)
+        if part is None:
+            continue
+        if not isinstance(part, dict):
+            raise ValueError("VM status contains an invalid component")
+        if key == "speech":
+            number(part, "age", required=True)
+            if part.get("queued_audio_s") is not None:
+                number(part, "queued_audio_s")
+            if type(part.get("decode_error", False)) is not bool:
+                raise ValueError("Speech status is unavailable")
+            flags = part.get("signal_flags", [])
+            if (
+                not isinstance(flags, list)
+                or len(flags) > 32
+                or any(not isinstance(flag, str) or len(flag) > 80 for flag in flags)
+            ):
+                raise ValueError("Speech signal status is unavailable")
+        else:
+            if part.get("stage") not in ("joining", "needs_operator", "admitted", "rejected"):
+                raise ValueError("Admission status is unavailable")
+            number(part, "utc", required=True)
+            number(part, "deadline", required=part.get("stage") == "needs_operator")
+    return value
 
 
 class ConsoleAuth:
@@ -134,6 +194,7 @@ class EventFeed:
         self.lock = threading.Lock()
         self.items = deque(maxlen=100)
         self.emit = emit
+        self.storage_error = None
 
     def add(self, kind, message, level="info", **fields):
         with self.lock:
@@ -145,14 +206,38 @@ class EventFeed:
                 level=level,
                 **fields,
             )
-            fd = os.open(self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY, 0o600)
-            with os.fdopen(fd, "a") as stream:
-                os.fchmod(stream.fileno(), 0o600)
-                stream.write(json.dumps(event) + "\n")
-                stream.flush()
+            previous = self.storage_error
+            try:
+                fd = os.open(
+                    self.path, os.O_CREAT | os.O_APPEND | os.O_WRONLY | os.O_NOFOLLOW, 0o600
+                )
+                with os.fdopen(fd, "a") as stream:
+                    os.fchmod(stream.fileno(), 0o600)
+                    stream.write(json.dumps(event) + "\n")
+                    stream.flush()
+                self.storage_error = None
+            except OSError as exc:
+                self.storage_error = type(exc).__name__
+            if previous != self.storage_error:
+                self.items.append(
+                    dict(
+                        id=secrets.token_hex(8),
+                        utc=time.time(),
+                        kind="activity_storage_unavailable"
+                        if self.storage_error
+                        else "activity_storage_recovered",
+                        level="warning" if self.storage_error else "info",
+                        message="Activity history could not be saved; recording is independent"
+                        if self.storage_error
+                        else "Activity history storage recovered",
+                    )
+                )
             self.items.append(event)
             if self.emit:
-                self.emit(event)
+                try:
+                    self.emit(event)
+                except OSError:
+                    pass  # A disconnected event consumer does not own the VM console.
             return event
 
     def recent(self):
@@ -196,6 +281,8 @@ class GuestBridge:
                 # stderr may contain paths or text; keep it out of the public API.
                 raise RuntimeError("VM control is unavailable; check the private console log")
             value = json.loads(result.stdout)
+            if not isinstance(value, dict):
+                raise ValueError("VM control returned an invalid response")
             if "error" in value:
                 raise RuntimeError(value["error"])
             return value
@@ -253,9 +340,20 @@ class OperatorServer(ThreadingHTTPServer):
 
     def status(self):
         with self.status_lock:
-            if self.cached_status and time.monotonic() - self.cached_status[0] < 3:
-                return self.cached_status[1]
-            value = self.bridge.call(dict(op="status"))
+            if self.cached_status:
+                elapsed = max(0, time.monotonic() - self.cached_status[0])
+                if elapsed < 3:
+                    value = deepcopy(self.cached_status[1])
+                    for key in ("capture", "speech"):
+                        if value.get(key) is not None:
+                            value[key]["age"] += elapsed
+                    if (
+                        value.get("capture") is not None
+                        and value["capture"].get("elapsed") is not None
+                    ):
+                        value["capture"]["elapsed"] += elapsed
+                    return value
+            value = validate_status(self.bridge.call(dict(op="status")))
             capture = value.get("capture")
             healthy = bool(
                 capture
@@ -312,7 +410,7 @@ class OperatorServer(ThreadingHTTPServer):
                     )
                     self.last_speech_error = failed
             self.cached_status = (time.monotonic(), value)
-            return value
+            return deepcopy(value)
 
     def session(self):
         return dict(

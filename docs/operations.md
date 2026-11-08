@@ -1,7 +1,7 @@
 # Operations and recovery
 
 Use the same CLI/configuration for a human operator, cron, or Hermes. Inspect
-`live-transcript --json status` before repairing anything. Doctor is read-only;
+`live-transcript --json status` before repairing anything. The readiness check is read-only;
 watchdog is repair-capable unless `--dry-run` is supplied.
 
 ## Failure decisions
@@ -96,7 +96,7 @@ entries, even when a batch exceeds the camera's visible window.
 
 ## Before a real meeting
 
-Run doctor, inspect current ownership and next calendar timer, confirm disk space
+Run check, inspect current ownership and next calendar timer, confirm disk space
 and backup status, then stop only known test sessions. Do not restart a healthy
 speech engine or mutate PulseAudio/camera topology during a real call. A successful
 prejoin or fixture test does not guarantee host admission. Keep meeting URLs,

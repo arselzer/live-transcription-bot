@@ -704,12 +704,17 @@ def guest_action(request):
         try:
             gpu = Path(get("vm", "home")) / "gpu.json"
             raw = json.loads(gpu.read_text())
+            if not isinstance(raw, dict):
+                raise ValueError("Speech metrics must be an object")
+            quality = raw.get("audio_quality") or {}
+            if not isinstance(quality, dict):
+                raise ValueError("Speech quality metrics must be an object")
             age = max(0, now - gpu.stat().st_mtime)
             if age < 20:
                 speech = dict(
                     age=age,
                     queued_audio_s=raw.get("queued_audio_s"),
-                    signal_flags=raw.get("audio_quality", {}).get("flags", []),
+                    signal_flags=quality.get("flags", []),
                     decode_error=bool(raw.get("decode_error")),
                 )
         except (OSError, ValueError, TypeError):

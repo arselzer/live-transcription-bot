@@ -43,6 +43,11 @@ metrics are fresh; silence is distinct from recognition failure. Screen snapshot
 can preserve speaker evidence when a manual browser has no DOM observer; this
 does not claim reliable structured speaker attribution.
 
+Status snapshots keep aging while cached. Malformed metrics are reported as
+unavailable, and the monitor keeps polling so it can detect recovery. An activity
+history write failure is reported separately and does not stop status monitoring
+or the independent recording.
+
 Google admission and evidence capture have separate labels. A green writer during
 prejoin means join evidence is being saved, not that meeting entry succeeded.
 Writer health checks actual file progress as well as its process heartbeat.

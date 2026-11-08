@@ -19,7 +19,7 @@ cd live-transcription-bot
 ./install.sh --plan
 ./install.sh
 source .venv/bin/activate
-live-transcript doctor
+live-transcript check
 live-transcript --json info
 ```
 
@@ -226,7 +226,7 @@ See [the delivery contract](docs/hermes.md#durable-notifications-and-delivery).
 | Symptom | First check |
 | --- | --- |
 | Bot stays in lobby | Host admission and the invitation; prejoin is not proof of entry |
-| No live captions | `doctor`, caption/ASR services and VM-to-host connectivity; check that original capture continues |
+| No live captions | `check`, caption/ASR services and VM-to-host connectivity; check that original capture continues |
 | Bot has left but notes are missing | `jobs` and its checkpoint; final processing is asynchronous |
 | GPU fails | CPU standby health and queued audio; preserve originals for full-model reprocessing |
 | Speaker labels look wrong | Treat UI-derived names as uncertain, especially at speaker changes or overlap |
@@ -265,11 +265,5 @@ by the prepared VM. Normal installed wheels can build this bundle too.
 .venv/bin/python -m tools.run_tests
 .venv/bin/ruff check src tools tests build_backend.py
 .venv/bin/ruff format --check src tools tests build_backend.py
-.venv/bin/python -m tools.check_public_source --private-policy /path/to/private-policy.json
+.venv/bin/python -m tools.check_public_source
 ```
-
-Source selection is explicit in `PUBLIC_SOURCE_FILES.txt`. Private policy,
-recordings, assets, virtual environments and editable-install metadata stay out
-of source history. Release builds enforce the source/privacy gate. Review the
-Git author name/email and history separately before publishing.
-A project license has not yet been selected.

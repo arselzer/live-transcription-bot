@@ -16,7 +16,7 @@ Before scheduling an agent, run the exact executable that its scripts use:
 
 ```bash
 live-transcript --config /path/to/profile.toml --json info
-live-transcript --config /path/to/profile.toml --json doctor
+live-transcript --config /path/to/profile.toml --json check
 live-transcript --config /path/to/profile.toml --json status
 ```
 
@@ -26,10 +26,10 @@ package. Use the same explicit profile for every command, including console,
 calendar, watchdog, recovery, and notification acknowledgement. Keep cron clients
 pinned to that executable; do not use a second copy of the recorder as an adapter.
 
-Doctor reports `recording_ready` separately from `transcription_ready`. It checks
+The readiness check reports `recording_ready` separately from `transcription_ready`. It checks
 the speech health endpoint rather than treating a listening port as model
-readiness. Normal doctor exits nonzero when live transcription is unavailable;
-`doctor --recording-only` checks capture without requiring speech model files.
+readiness. Normal check exits nonzero when live transcription is unavailable;
+`check --recording-only` checks capture without requiring speech model files.
 Neither command removes systemd resource holds or starts another speech model.
 
 ## Durable notifications and delivery

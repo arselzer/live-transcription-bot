@@ -35,7 +35,7 @@ deleted on failure. Setup never silently overwrites user-edited managed profiles
 
 `--recording-only` skips speech models and services. This is useful for validating
 recording infrastructure; it deliberately provides no live transcription. The
-ordinary doctor also checks speech dependencies. Use `doctor --recording-only`
+ordinary check also checks speech dependencies. Use `check --recording-only`
 to check capture without requiring speech weights or binaries. Speech endpoints
 remain advisory in that mode. `--no-start-services` prepares full installation without
 launching speech engines. Setup validates audio with a generated tone and reads
@@ -115,7 +115,7 @@ systemctl --user enable --now whisper-stt.service whisper-stt-cpu.service \
   whisper-stt-cpu-small.service captiond.service
 systemctl --user status captiond.service whisper-stt.service
 journalctl --user -u captiond.service -n 80 --no-pager
-live-transcript doctor
+live-transcript check
 ```
 
 CPU services disable GPU offload. The full CPU model is tried before the smaller
@@ -174,7 +174,7 @@ under the actual pointer before clicking; the entered name is verified exactly,
 including Unicode. A failed verification stops the join and retains diagnostics.
 `google.input_mode="dom"` selects ordinary Playwright input for diagnosis.
 `google.admission_timeout` defaults to 330 seconds and never extends the original
-meeting deadline. `doctor` reports missing native-input dependencies.
+meeting deadline. `check` reports missing native-input dependencies.
 
 Google's independent audio, full-desktop video, snapshots, and browser speaker
 observer start before browser navigation, so a failed join or manual takeover
