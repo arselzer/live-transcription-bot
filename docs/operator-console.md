@@ -62,6 +62,8 @@ fragments do not appear in ordinary HTTP request URLs. Authentication exchanges
 the token for an HttpOnly, SameSite=Strict session cookie. API, noVNC assets, and
 WebSocket connections require it. Host and Origin checks protect mutations and
 WebSocket upgrades. Runtime files and event feeds are private to the host user.
+Each console uses a different cookie name: browser cookies do not isolate TCP
+ports, so multiple VM consoles on one VPN hostname must not share a login cookie.
 
 Default binding is `127.0.0.1`. `--listen 0.0.0.0 --advertise-host console.example`
 is an explicit trusted-VPN choice. The built-in listener is HTTP. Do not expose

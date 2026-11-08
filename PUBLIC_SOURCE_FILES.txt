@@ -154,3 +154,4 @@ src/live_transcript/operator_ui/app.js
 tests/test_operator_console.py
 docs/operator-console.md
 docs/hermes.md
+docs/multiple-meetings.md

@@ -108,7 +108,12 @@ class ASRRouter:
                         )
                     self.selected(
                         engine,
-                        primary_error or "GPU unavailable; retained audio is being decoded on CPU",
+                        primary_error
+                        or (
+                            "Primary CPU recognition is unavailable or behind; using CPU fallback"
+                            if self.primary_engine == "cpu-primary"
+                            else "GPU unavailable; retained audio is being decoded on CPU"
+                        ),
                         rtf,
                     )
                     if hasattr(result, "__dict__"):

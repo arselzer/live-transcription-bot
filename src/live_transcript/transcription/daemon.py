@@ -191,8 +191,9 @@ class ASRSegments(list):
 
 
 def stt_server(path, lang="", prompt="", endpoint=None, timeout=12):
-    """POST wav to whisper-server -> [(t_seconds, text)] or None if unreachable."""
+    """Return filtered segments and metadata; propagate backend failures."""
     import urllib.request
+    import urllib.error
 
     boundary = "----capt" + str(int(time.time() * 1000))
     with open(path, "rb") as fh:
@@ -207,26 +208,48 @@ def stt_server(path, lang="", prompt="", endpoint=None, timeout=12):
         fields.append(("language", lang))  # pin: auto-detect on 9 s windows misfires
     if prompt:
         fields.append(("prompt", prompt))  # initial_prompt: names/jargon/recent context
-    body = b""
-    for k, v in fields:
+
+    def post(include_probabilities, budget):
+        body = b""
+        for k, v in fields:
+            if k == "no_language_probabilities" and not include_probabilities:
+                v = "true"
+            body += (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
+            ).encode()
         body += (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="{k}"\r\n\r\n{v}\r\n'
-        ).encode()
-    body += (
-        (
-            f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
-            f'filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n'
-        ).encode()
-        + data
-        + f"\r\n--{boundary}--\r\n".encode()
-    )
-    req = urllib.request.Request(
-        endpoint or STT_URL,
-        data=body,
-        headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
-    )
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        d = json.loads(resp.read().decode())
+            (
+                f'--{boundary}\r\nContent-Disposition: form-data; name="file"; '
+                f'filename="a.wav"\r\nContent-Type: audio/wav\r\n\r\n'
+            ).encode()
+            + data
+            + f"\r\n--{boundary}--\r\n".encode()
+        )
+        req = urllib.request.Request(
+            endpoint or STT_URL,
+            data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"},
+        )
+        with urllib.request.urlopen(req, timeout=budget) as resp:
+            return json.loads(resp.read().decode())
+
+    started = time.monotonic()
+    metadata_fallback = False
+    try:
+        d = post(True, timeout)
+    except urllib.error.HTTPError as exc:
+        # whisper.cpp can finish VAD with no speech, then throw while building
+        # optional language probabilities for an invalid detected language ID.
+        # Retry the same audio without that metadata; never turn an HTTP error
+        # into an assumed empty transcript or relax recognition thresholds.
+        if exc.code != 500 or b"basic_string: construction from null" not in exc.read(4096):
+            raise
+        exc.close()
+        remaining = timeout - (time.monotonic() - started)
+        if remaining <= 0:
+            raise
+        d = post(False, remaining)
+        metadata_fallback = True
     if os.environ.get("CAPTION_DIAGNOSTIC_DIR"):
         from pathlib import Path
         import shutil
@@ -237,6 +260,7 @@ def stt_server(path, lang="", prompt="", endpoint=None, timeout=12):
         (root / (name + ".json")).write_text(json.dumps(d, ensure_ascii=False))
         shutil.copyfile(path, root / (name + ".wav"))
     out = ASRSegments(language_probs=d.get("language_probabilities", {}))
+    out.language_metadata_fallback = metadata_fallback
     pcm = None
     sample_rate = 0
     for seg in d.get("segments", []):

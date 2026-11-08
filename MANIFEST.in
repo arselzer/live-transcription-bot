@@ -154,3 +154,4 @@ include src/live_transcript/operator_ui/app.js
 include tests/test_operator_console.py
 include docs/operator-console.md
 include docs/hermes.md
+include docs/multiple-meetings.md

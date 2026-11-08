@@ -146,7 +146,22 @@ input with no Enter events. The real meeting browser was not restarted for these
 checks. Browser-only tests should use DOM readiness or explicit connection state;
 an active noVNC WebSocket makes generic network-idle checks unsuitable.
 
+The two-VM November 8 drill also opened both consoles in one browser context.
+Both authenticated independently, kept their noVNC connections, and returned
+status without repeated login requests. A shared-cookie-jar regression guards
+against one console overwriting another's session on the same host/different port.
+
 ## Managed-install validation
+
+The November 8 live drill exposed a whisper.cpp verbose-JSON failure after VAD
+found no speech: optional language metadata raised a null-string exception and
+the retained utterance blocked subsequent live chunks. A fresh isolated server
+reproduced the HTTP 500. Retrying the same WAV with only language probabilities
+disabled returned a valid empty result in 0.02 seconds. The client now performs
+that bounded retry only for the specific exception, within the original timeout.
+Other errors remain failures; audio, prompts, language selection, and recognition
+thresholds are preserved. Regression cases cover the retry payload, time budget,
+real text, empty results, normal language probabilities, and unrelated failures.
 
 `install.sh --plan` and `live-transcript setup --plan` must work before a profile
 exists, without changing the host. Offline regressions cover profile/domain/disk

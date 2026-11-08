@@ -1,12 +1,14 @@
 """Console authentication, clipboard boundaries, and capture-independent recovery."""
 
 import http.client
+import http.cookiejar
 import json
 import os
 from pathlib import Path
 import tempfile
 import threading
 import unittest
+import urllib.request
 from unittest.mock import Mock, patch
 from urllib.parse import urlsplit
 
@@ -58,6 +60,39 @@ class ConsoleHTTPTests(unittest.TestCase):
         for path in ("/api/status", "/api/events", "/novnc/vnc.html", "/novnc/websockify"):
             self.assertEqual(self.request("GET", path)[0], 401)
         self.bridge.call.assert_not_called()
+
+    def test_two_vm_consoles_keep_independent_logins_in_one_browser_cookie_jar(self):
+        second = OperatorServer(
+            ("127.0.0.1", 0),
+            1,
+            self.bridge,
+            EventFeed(Path(self.temp.name) / "second.events.jsonl"),
+            "127.0.0.1",
+        )
+        thread = threading.Thread(target=second.serve_forever, daemon=True)
+        thread.start()
+        jar = http.cookiejar.CookieJar()
+        browser = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(jar))
+        try:
+            for server in (self.server, second):
+                origin = "http://" + server.authority
+                request = urllib.request.Request(
+                    origin + "/api/session",
+                    data=json.dumps(dict(token=server.token)).encode(),
+                    headers={"Content-Type": "application/json", "Origin": origin},
+                )
+                with browser.open(request, timeout=3) as response:
+                    self.assertEqual(response.status, 200)
+            self.assertNotEqual(self.server.cookie_name, second.cookie_name)
+            self.assertEqual(len(jar), 2)
+            for server in (self.server, second, self.server):
+                with browser.open(
+                    "http://" + server.authority + "/api/status", timeout=3
+                ) as response:
+                    self.assertEqual(response.status, 200)
+        finally:
+            second.shutdown()
+            second.server_close()
 
     def test_invalid_capability_host_and_origin_are_rejected(self):
         self.assertEqual(self.request("POST", "/api/session", dict(token="wrong"))[0], 401)

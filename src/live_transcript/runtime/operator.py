@@ -108,6 +108,9 @@ class OperatorServer(ThreadingHTTPServer):
         self.bridge, self.events = bridge, events
         self.token = secrets.token_urlsafe(32)
         self.cookie = secrets.token_urlsafe(32)
+        # Browser cookies are scoped to hosts/paths, not TCP ports. Independent
+        # VM consoles on the same VPN host must not overwrite each other's login.
+        self.cookie_name = "lt_console_" + secrets.token_hex(8)
         self.cached_status = None
         self.status_lock = threading.Lock()
         self.last_capture_state = None
@@ -214,8 +217,8 @@ class Handler(BaseHTTPRequestHandler):
     def authenticated(self):
         try:
             cookie = SimpleCookie(self.headers.get("Cookie", ""))
-            return "lt_console" in cookie and secrets.compare_digest(
-                cookie["lt_console"].value, self.server.cookie
+            return self.server.cookie_name in cookie and secrets.compare_digest(
+                cookie[self.server.cookie_name].value, self.server.cookie
             )
         except Exception:
             return False
@@ -256,7 +259,7 @@ class Handler(BaseHTTPRequestHandler):
                 self.headers_safe()
                 self.send_header(
                     "Set-Cookie",
-                    f"lt_console={self.server.cookie}; Path=/; HttpOnly; SameSite=Strict",
+                    f"{self.server.cookie_name}={self.server.cookie}; Path=/; HttpOnly; SameSite=Strict; Max-Age=7200",
                 )
                 self.send_header("Content-Type", "application/json")
                 self.send_header("Content-Length", str(len(response)))

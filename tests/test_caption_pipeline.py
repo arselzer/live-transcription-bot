@@ -6,6 +6,7 @@ import tempfile
 import threading
 import time
 import unittest
+import urllib.error
 from unittest.mock import patch
 import wave
 
@@ -24,6 +25,90 @@ def wav_bytes(pcm):
         wav.setframerate(16000)
         wav.writeframes(pcm)
     return out.getvalue()
+
+
+class WhisperRequestTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.wav = Path(temporary.name) / "input.wav"
+        self.wav.write_bytes(wav_bytes(b"\0\0" * 16000))
+
+    def failure(self, message, status=500):
+        error = urllib.error.HTTPError(
+            "http://example.invalid/inference", status, "failure", {}, io.BytesIO(message)
+        )
+        self.addCleanup(error.close)
+        return error
+
+    def response(self, segments=(), probabilities=None):
+        return io.BytesIO(
+            json.dumps(
+                dict(segments=list(segments), language_probabilities=probabilities or {})
+            ).encode()
+        )
+
+    def test_optional_language_failure_retries_same_audio_within_original_budget(self):
+        failure = self.failure(
+            b"500 Internal Server Error\nbasic_string: construction from null is not valid"
+        )
+        response = self.response(
+            [dict(start=0, end=1, text="Keep every spoken word.", avg_logprob=-0.1)]
+        )
+        with (
+            patch("urllib.request.urlopen", side_effect=[failure, response]) as request,
+            patch("time.monotonic", side_effect=[100, 102]),
+        ):
+            result = app.stt_server(self.wav, "en", "project context", timeout=5)
+        self.assertEqual(result, [(0, "Keep every spoken word.")])
+        self.assertTrue(result.language_metadata_fallback)
+        self.assertEqual(request.call_args_list[0].kwargs["timeout"], 5)
+        self.assertEqual(request.call_args_list[1].kwargs["timeout"], 3)
+        first, second = [call.args[0].data for call in request.call_args_list]
+        self.assertIn(b'name="no_language_probabilities"\r\n\r\nfalse', first)
+        self.assertIn(b'name="no_language_probabilities"\r\n\r\ntrue', second)
+        for payload in (first, second):
+            self.assertIn(self.wav.read_bytes(), payload)
+            self.assertIn(b'name="language"\r\n\r\nen', payload)
+            self.assertIn(b"project context", payload)
+
+    def test_actual_empty_response_is_accepted_after_metadata_retry(self):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[self.failure(b"basic_string: construction from null"), self.response()],
+        ):
+            self.assertEqual(app.stt_server(self.wav, "en"), [])
+
+    def test_other_errors_are_not_reinterpreted_as_silence(self):
+        for code, message in [(500, b"failed to process audio"), (503, b"unavailable")]:
+            with patch(
+                "urllib.request.urlopen", side_effect=self.failure(message, code)
+            ) as request:
+                with self.assertRaises(urllib.error.HTTPError):
+                    app.stt_server(self.wav, "en")
+                self.assertEqual(request.call_count, 1)
+
+    def test_failed_retry_remains_a_failure_and_cannot_loop(self):
+        with patch(
+            "urllib.request.urlopen",
+            side_effect=[
+                self.failure(b"basic_string: construction from null"),
+                self.failure(b"failed to process audio"),
+            ],
+        ) as request:
+            with self.assertRaises(urllib.error.HTTPError):
+                app.stt_server(self.wav, "en")
+            self.assertEqual(request.call_count, 2)
+
+    def test_successful_requests_keep_language_probabilities(self):
+        with patch(
+            "urllib.request.urlopen",
+            return_value=self.response(probabilities=dict(en=0.85, de=0.15)),
+        ) as request:
+            result = app.stt_server(self.wav, "en")
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(result.language_probs, dict(en=0.85, de=0.15))
+        self.assertFalse(result.language_metadata_fallback)
 
 
 class PipelineTests(unittest.TestCase):

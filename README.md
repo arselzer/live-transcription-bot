@@ -94,6 +94,10 @@ See [console operations](docs/operator-console.md) and the
 [Hermes integration contract](docs/hermes.md) for recovery, notifications, and
 sharing the console link before a meeting.
 
+For concurrent recordings, provision a separate VM/profile for each meeting.
+See [multiple meetings and bridging](docs/multiple-meetings.md) for isolation,
+shared speech-service capacity, and the proposed fleet/bridge architecture.
+
 ## Join and record a meeting
 
 Use the full invitation and keep it quoted:

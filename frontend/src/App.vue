@@ -14,7 +14,8 @@ const fragment = new URLSearchParams(location.hash.slice(1));
 const token = fragment.get("token") || "",
   password = fragment.get("password") || "";
 const authenticated = ref(false);
-const now = ref(Date.now()), lastStatusAt = ref(0);
+const now = ref(Date.now()),
+  lastStatusAt = ref(0);
 let timer,
   clockTimer,
   refreshing = false,
@@ -31,9 +32,15 @@ const viewerUrl = computed(
     }),
 );
 const capture = computed(() => state.value?.capture);
-const statusAge = computed(() => Math.max(0, (now.value - lastStatusAt.value) / 1000));
-const fresh = computed(() => capture.value && capture.value.age + statusAge.value < 20);
-const speechFresh = computed(() => state.value?.speech && state.value.speech.age + statusAge.value < 20);
+const statusAge = computed(() =>
+  Math.max(0, (now.value - lastStatusAt.value) / 1000),
+);
+const fresh = computed(
+  () => capture.value && capture.value.age + statusAge.value < 20,
+);
+const speechFresh = computed(
+  () => state.value?.speech && state.value.speech.age + statusAge.value < 20,
+);
 const recording = computed(
   () =>
     fresh.value &&
@@ -41,7 +48,9 @@ const recording = computed(
     capture.value.screen?.running,
 );
 const elapsed = computed(() => {
-  const seconds = (capture.value?.elapsed || 0) + (capture.value ? Math.min(statusAge.value, 20) : 0);
+  const seconds =
+    (capture.value?.elapsed || 0) +
+    (capture.value ? Math.min(statusAge.value, 20) : 0);
   return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
 });
 const disk = computed(() =>
@@ -49,7 +58,9 @@ const disk = computed(() =>
     ? "—"
     : (capture.value.free_bytes / 1073741824).toFixed(1) + " GB",
 );
-const control = computed(() => state.value?.control === true && statusAge.value < 12);
+const control = computed(
+  () => state.value?.control === true && statusAge.value < 12,
+);
 async function api(path, data, retry = true) {
   const r = await fetch("/api/" + path, {
     method: data === undefined ? "GET" : "POST",
@@ -146,48 +157,49 @@ async function connect() {
   }
 }
 onMounted(async () => {
-  clockTimer = setInterval(() => { now.value = Date.now(); }, 1000);
+  clockTimer = setInterval(() => {
+    now.value = Date.now();
+  }, 1000);
   await connect();
   timer = setInterval(refresh, 4000);
 });
-onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
+onUnmounted(() => {
+  clearInterval(timer);
+  clearInterval(clockTimer);
+});
 </script>
 
 <template>
   <div class="shell">
     <header class="topbar">
-      <a class="brand" href="#" @click.prevent
-        ><span class="brand-icon">≋</span
-        ><span>Live Transcript<small>MEETING CONSOLE</small></span></a
-      >
+      <div class="brand">Live Transcript <span>VM console</span></div>
       <div class="session-badges">
         <span class="badge" :class="{ good: connected }"
-          ><i />{{ connected ? "Viewer connected" : "Viewer offline" }}</span
+          ><i />{{ connected ? "Connected" : "Disconnected" }}</span
         ><span class="badge" :class="{ recording }"
           ><i />{{
             recording
               ? "Recording"
               : fresh
-                ? "Capture needs attention"
-                : "Capture unconfirmed"
+                ? "Recording needs attention"
+                : "Recording status unavailable"
           }}</span
         >
       </div>
-      <span class="private-label">PRIVATE VM</span>
     </header>
     <main>
       <section class="workspace">
         <div class="section-heading">
-          <div>
-            <span class="eyebrow">BROWSER WORKSPACE</span>
-            <h1>Your meeting, within reach.</h1>
-          </div>
+          <h1>Meeting browser</h1>
           <span class="mode" :class="{ active: control }">{{
-            control ? "Manual control active" : "View only"
+            control ? "Keyboard and mouse enabled" : "View only"
           }}</span>
         </div>
         <div v-if="error" role="alert" class="banner error">
-          {{ error }}<button @click="authenticated ? refresh() : connect()">Retry</button>
+          {{ error
+          }}<button @click="authenticated ? refresh() : connect()">
+            Retry
+          </button>
         </div>
         <div class="viewer-frame">
           <iframe
@@ -200,9 +212,8 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
             @load="attachViewer"
           />
           <div v-else class="empty">
-            <span class="brand-icon">≋</span>
-            <h2>Opening your console…</h2>
-            <p>Open the complete private console link to continue.</p>
+            <h2>Connecting…</h2>
+            <p>Use the full console link to connect.</p>
           </div>
         </div>
         <div class="viewer-toolbar">
@@ -211,30 +222,28 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
             <span class="subtle"
               >·
               {{
-                control ? "Click inside to use the browser" : "Observation mode"
+                control ? "Click inside to control the browser" : "View only"
               }}</span
             ></span
           >
           <div>
             <button @click="reconnect" :disabled="!authenticated">
-              Reconnect viewer</button
+              Reconnect</button
             ><button @click="fullscreen" :disabled="!authenticated">
-              ⤢ Fullscreen
+              Fullscreen
             </button>
           </div>
         </div>
         <p class="workspace-note">
-          Recording runs independently. Reconnecting this viewer does not
-          restart the meeting.
+          You can reconnect this view while recording continues.
         </p>
       </section>
       <aside>
         <section class="panel paste-panel">
           <div class="panel-title">
-            <span class="eyebrow">QUICK INPUT</span
-            ><span class="keycap">⌘ / Ctrl V</span>
+            <h2>Paste into the VM</h2>
+            <span class="keycap">⌘ / Ctrl V</span>
           </div>
-          <h2>Paste straight into the VM</h2>
           <p>Click the destination field in the browser, then paste here.</p>
           <label class="sr-only" for="paste">Text to paste into the VM</label
           ><textarea
@@ -252,9 +261,9 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
             :disabled="!control || busy || !text"
             @click="action('paste', { text })"
           >
-            {{ busy ? "Sending…" : "Paste into VM" }}<span>↗</span>
+            {{ busy ? "Pasting…" : "Paste into VM" }}
           </button>
-          <p class="micro">Pastes text only. Never presses Enter.</p>
+          <p class="micro">Pastes text without pressing Enter.</p>
           <div v-if="notice" role="status" class="success-note">
             {{ notice }}
           </div>
@@ -268,7 +277,7 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
               :disabled="!control || busy"
               @click="action('key', { key: 'Tab' })"
             >
-              Tab ↹</button
+              Tab</button
             ><button
               :disabled="!control || busy"
               @click="action('key', { key: 'ctrl+l' })"
@@ -279,13 +288,15 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
         </section>
         <section class="panel">
           <div class="panel-title">
-            <span class="eyebrow">CAPTURE HEALTH</span
-            ><span class="pulse" :class="{ good: recording }" />
+            <h2>Recording</h2>
+            <span class="pulse" :class="{ good: recording }" />
           </div>
           <div class="capture-title">
             <h2>
               {{
-                recording ? "Evidence is being saved" : "Check recording status"
+                recording
+                  ? "Audio and video are being saved"
+                  : "Check recording status"
               }}
             </h2>
             <span class="duration">{{ elapsed }}</span>
@@ -325,21 +336,20 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
               state.speech.decode_error
                 ? "Recognition delayed"
                 : state.speech.signal_flags?.includes("digital_silence")
-                  ? "Signal: silence"
-                  : "Signal present"
+                  ? "No audio detected"
+                  : "Audio detected"
             }}</span>
           </div>
           <p class="micro" v-if="capture?.speaker_source">
             {{ capture.speaker_source }}
           </p>
           <p class="micro" v-if="!fresh">
-            No fresh capture heartbeat for this display.
+            Recording status has not updated recently.
           </p>
         </section>
         <section class="panel activity">
           <div class="panel-title">
-            <span class="eyebrow">RECENT ACTIVITY</span
-            ><span class="subtle">Hermes ready</span>
+            <h2>Activity</h2>
           </div>
           <ol v-if="events.length">
             <li v-for="event in events.slice(-6).reverse()" :key="event.id">
@@ -358,15 +368,9 @@ onUnmounted(() => { clearInterval(timer); clearInterval(clockTimer); });
           <p v-else class="micro">
             Status changes and manual actions appear here.
           </p>
-          <p class="micro">
-            Clipboard contents are never written to the activity log.
-          </p>
+          <p class="micro">Pasted text is not included in this log.</p>
         </section>
       </aside>
     </main>
-    <footer>
-      <span>Isolated browser. Independent capture.</span
-      ><span>Live Transcript / Operator console</span>
-    </footer>
   </div>
 </template>
