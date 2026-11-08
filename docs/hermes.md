@@ -62,6 +62,18 @@ The
 owner-only ledger is part of `watchdog-state.json`; malformed retry/delivery
 state is retained and reported, never silently reset.
 
+For a stdout-only consumer that cannot relay a delivery receipt, run
+`live-transcript --json watchdog --ack-after-print`: the runtime prints the
+report and then acknowledges that pass's own notification IDs. A failed print
+leaves the ledger pending for the next pass. This hand-off is for a trusted
+local agent runtime that has verbatim-rendered the messages; do not pipe into
+an untrusted consumer first.
+
+Each meeting run also produces one `recording-started` confirmation once the
+provider reports positive admission and the archive exists, so a user knows the
+bot joined without asking. Invitation passcode fragments (`#pwd-...`) are
+stripped from notification text.
+
 Hermes script-job stdout delivery alone supplies no delivery acknowledgement
 back to the recorder. Such jobs remain best effort; their pending ledger can be
 read by an agent or delivery adapter after an outage. Do not acknowledge a batch

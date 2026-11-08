@@ -138,10 +138,11 @@ class AckAfterPrintTests(unittest.TestCase):
             ), patch(
                 "live_transcript.runtime.operator.console_notifications", return_value={}
             ), patch.object(
-                notifications, "acknowledge"
+                notifications, "apply_ack"
             ) as ack:
                 watchdog.main(["--json", "--ack-after-print"])
-                ack.assert_called_once_with(["a" * 64])
+                ack.assert_called_once()
+                self.assertEqual(ack.call_args.args[1], ["a" * 64])
 
     def test_no_flag_leaves_ledger_untouched(self):
         from live_transcript.runtime import watchdog
@@ -167,7 +168,7 @@ class AckAfterPrintTests(unittest.TestCase):
             ), patch(
                 "live_transcript.runtime.operator.console_notifications", return_value={}
             ), patch.object(
-                notifications, "acknowledge"
+                notifications, "apply_ack"
             ) as ack:
                 watchdog.main(["--json"])
                 ack.assert_not_called()

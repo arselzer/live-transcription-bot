@@ -121,21 +121,35 @@ def pending(limit=100):
     )
 
 
-def acknowledge(identifiers):
-    if not identifiers or any(not re.fullmatch(r"[a-f0-9]{32}", value) for value in identifiers):
+def apply_ack(state, identifiers, now=None):
+    """Remove delivered IDs from `state` (in memory) and record receipts.
+
+    Shared by the CLI acknowledge path and the watchdog's in-process
+    ``--ack-after-print`` hand-off, which already holds the state lock and must
+    not re-acquire it.
+    """
+    if not identifiers or any(
+        not re.fullmatch(r"[a-f0-9]{32}", value) for value in identifiers
+    ):
         raise ValueError("Acknowledgement needs valid notification IDs")
+    queued = state.setdefault("notifications", {})
+    receipts = state.setdefault("notification_acks", {})
+    if any(ident not in queued and ident not in receipts for ident in identifiers):
+        raise ValueError("Unknown notification ID; nothing acknowledged")
+    moment = time.time() if now is None else now
+    for ident in identifiers:
+        queued.pop(ident, None)
+        receipts.setdefault(ident, moment)
+    # Only delivered receipts are bounded. Pending alerts are never evicted.
+    state["notification_acks"] = dict(
+        sorted(receipts.items(), key=lambda row: row[1])[-ACK_RECEIPT_LIMIT:]
+    )
+    return len(queued)
+
+
+def acknowledge(identifiers):
     path = state_path()
     with locked_state(path) as state:
-        queued = state.setdefault("notifications", {})
-        receipts = state.setdefault("notification_acks", {})
-        if any(ident not in queued and ident not in receipts for ident in identifiers):
-            raise ValueError("Unknown notification ID; nothing acknowledged")
-        for ident in identifiers:
-            queued.pop(ident, None)
-            receipts.setdefault(ident, time.time())
-        # Only delivered receipts are bounded. Pending alerts are never evicted.
-        state["notification_acks"] = dict(
-            sorted(receipts.items(), key=lambda row: row[1])[-ACK_RECEIPT_LIMIT:]
-        )
+        pending_total = apply_ack(state, identifiers)
         atomic_json(path, state)
-    return dict(version=1, acknowledged=identifiers, pending_count=len(queued))
+    return dict(version=1, acknowledged=identifiers, pending_count=pending_total)

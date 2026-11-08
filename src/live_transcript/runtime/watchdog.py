@@ -17,6 +17,7 @@ from pathlib import Path
 import shlex
 import socket
 import subprocess
+import sys
 import time
 
 from live_transcript.core.options import rejoin_options
@@ -536,10 +537,21 @@ def main(argv=None):
             print("\n".join(report["messages"]), flush=True)
         if a.ack_after_print and not a.dry_run and report["notifications"]:
             # Print succeeded; consumers without a delivery receipt close the
-            # ledger here. Failed prints fall through unacked for retry.
-            from live_transcript.integrations.notifications import acknowledge
+            # ledger here. Failed prints fall through unacked for retry. The
+            # state lock is already held by this process, so the ack mutates
+            # the in-memory state and re-persists it directly.
+            from live_transcript.integrations.notifications import apply_ack
 
-            acknowledge([n["id"] for n in report["notifications"] if n.get("id")])
+            try:
+                apply_ack(state, [n["id"] for n in report["notifications"] if n.get("id")])
+                atomic_json(STATE, state)
+            except Exception as exc:
+                print(
+                    f"notification acknowledgement failed ({type(exc).__name__}); "
+                    "entries stay pending",
+                    file=sys.stderr,
+                    flush=True,
+                )
 
 
 if __name__ == "__main__":

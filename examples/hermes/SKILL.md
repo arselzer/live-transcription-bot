@@ -62,7 +62,9 @@ The ordinary watchdog is repair-capable. `--json notifications` lists durable
 pending alerts with stable IDs; reading does not acknowledge delivery.
 
 Deliver only to the configured authorized conversation, deduplicate by ID, and
-run `--json notifications --ack ID ...` only after delivery succeeds. Never
+run `--json notifications --ack ID ...` only after delivery succeeds. For a
+trusted stdout-only cron consumer, `watchdog --ack-after-print` acknowledges
+that pass's own notifications after a successful print. Never
 acknowledge merely because output was read or printed. Retry an acknowledgement
 after a lost reply; the last 1,000 delivered receipts are idempotent. An old pending notification is historical
 evidence, not necessarily a current incident. Check that a console capability is
