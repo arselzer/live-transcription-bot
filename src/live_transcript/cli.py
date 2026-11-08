@@ -7,10 +7,12 @@ import argparse
 import json
 import os
 from pathlib import Path
+import re
 import shlex
 import shutil
 import socket
 import subprocess
+import sys
 import urllib.request
 
 
@@ -18,6 +20,13 @@ def emit(value, as_json=False):
     if as_json:
         print(json.dumps(value, ensure_ascii=False, indent=2))
     elif isinstance(value, dict) and "checks" in value:
+        if "recording_ready" in value:
+            print(
+                "Recording: "
+                + ("ready" if value["recording_ready"] else "not ready")
+                + "; live transcription: "
+                + ("ready" if value["transcription_ready"] else "not ready")
+            )
         for item in value["checks"]:
             print(f"{item['status'].upper():5} {item['name']}: {item['detail']}")
     else:
@@ -29,9 +38,45 @@ def current():
 
     path = Path(get("paths", "logs")) / "current_meeting.json"
     try:
-        return json.loads(path.read_text())
+        value = json.loads(path.read_text())
+        if not isinstance(value, dict):
+            raise ValueError("Invalid meeting bookkeeping; inspect the private state file")
+        return value
     except FileNotFoundError:
         return dict(status="idle")
+
+
+def runtime_info():
+    from importlib.metadata import version, PackageNotFoundError
+    from live_transcript.core.config import CONFIG, get
+
+    try:
+        installed_version = version("live-transcription-bot")
+    except PackageNotFoundError:
+        installed_version = "source checkout"
+    revision = None
+    source = Path(__file__).resolve().parents[2]
+    if (source / "PUBLIC_SOURCE_FILES.txt").is_file() and (source / ".git").exists():
+        try:
+            result = subprocess.run(
+                ["git", "-C", str(source), "rev-parse", "HEAD"],
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            if isinstance(result.stdout, str) and re.fullmatch(r"[a-f0-9]{40}\s*", result.stdout):
+                revision = result.stdout.strip()
+        except (OSError, subprocess.SubprocessError):
+            pass
+    return dict(
+        version=installed_version,
+        source_revision=revision,
+        package=str(Path(__file__).resolve().parent),
+        python=sys.executable,
+        config=CONFIG["_file"],
+        data_root=get("paths", "root"),
+        vm_name=get("vm", "name"),
+    )
 
 
 def remote_status(meeting):
@@ -41,8 +86,6 @@ def remote_status(meeting):
     if not token:
         return None
     # Validate without creating host-side guest directories.
-    import re
-
     if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", token):
         raise ValueError("invalid session token")
     command = shlex.join(guest_command("session", "--status", token))
@@ -73,7 +116,7 @@ def remote_status(meeting):
     return value
 
 
-def doctor():
+def doctor(*, recording_only=False):
     """Read-only preflight. Never load another model or touch archive storage."""
     from live_transcript.core.config import get, ssh_options
 
@@ -88,7 +131,7 @@ def doctor():
             "pass" if shutil.which(name) else "fail",
             shutil.which(name) or "missing executable",
         )
-    for name in ("model", "vad", "whisper_cli"):
+    for name in () if recording_only else ("model", "vad", "whisper_cli"):
         path = Path(get("paths", name))
         good = path.is_file() and path.stat().st_size > 0
         add(name, "pass" if good else "fail", str(path))
@@ -114,18 +157,21 @@ def doctor():
             add(name, "pass", "protocol replies")
         except Exception as exc:
             add(name, "warn", "live captions unavailable: " + type(exc).__name__)
-    from urllib.parse import urlsplit
-
-    endpoint = urlsplit(get("caption", "stt_url"))
     try:
-        with socket.create_connection(
-            (endpoint.hostname, endpoint.port or (443 if endpoint.scheme == "https" else 80)),
-            timeout=3,
-        ):
-            pass
-        add("speech backend", "pass", "reachable; no extra model was loaded")
-    except OSError:
-        add("speech backend", "warn", "unreachable; independent recording can continue")
+        health_url = get("caption", "stt_url").rsplit("/", 1)[0] + "/health"
+        with urllib.request.urlopen(health_url, timeout=3) as response:
+            data = json.loads(response.read(8192))
+        add(
+            "speech backend",
+            "pass" if data.get("status") == "ok" else "warn",
+            "health endpoint replied; no inference request sent",
+        )
+    except Exception as exc:
+        add(
+            "speech backend",
+            "warn",
+            "readiness unverified: " + type(exc).__name__ + "; source recording is independent",
+        )
     if get("asr", "cpu_fallback"):
         for name, url in [
             ("CPU large standby", get("asr", "cpu_url")),
@@ -133,7 +179,6 @@ def doctor():
         ]:
             if name == "CPU small standby" and not get("asr", "adaptive_model"):
                 continue
-            endpoint = urlsplit(url)
             try:
                 health_url = url.rsplit("/", 1)[0] + "/health"
                 with urllib.request.urlopen(health_url, timeout=3) as response:
@@ -156,10 +201,14 @@ def doctor():
         add("VM", "fail", "configure vm.ssh")
     else:
         code = (
-            "import importlib.util,json,pathlib,shutil; print(json.dumps(dict("
+            "import importlib.util,json,pathlib,shutil,subprocess; "
+            "r=subprocess.run(['pactl','list','short','sinks'],capture_output=True,text=True,timeout=3); "
+            "sinks=[line.split()[1] for line in r.stdout.splitlines() if len(line.split())>1]; "
+            "print(json.dumps(dict("
             "playwright=importlib.util.find_spec('playwright') is not None,"
             "xvfb=shutil.which('xvfb-run') is not None,ffmpeg=shutil.which('ffmpeg') is not None,"
             "camera=pathlib.Path('/dev/video0').exists(),native_input=shutil.which('xdotool') is not None and shutil.which('xclip') is not None,"
+            "audio=" + repr(get("audio", "sink")) + " in sinks,"
             "free=shutil.disk_usage('.').free)))"
         )
         try:
@@ -180,10 +229,17 @@ def doctor():
             )
             data = json.loads(result.stdout)
             good = (
-                all(data.get(k) for k in ("playwright", "xvfb", "ffmpeg", "camera"))
+                all(data.get(k) for k in ("playwright", "xvfb", "ffmpeg", "audio"))
                 and data["free"] > 1024**3
             )
             add("VM runtime", "pass" if good else "fail", json.dumps(data))
+            add(
+                "caption camera",
+                "pass" if data.get("camera") else "warn",
+                "device available"
+                if data.get("camera")
+                else "optional caption camera is unavailable; source audio capture is independent",
+            )
             if get("google", "input_mode") == "native":
                 add(
                     "Google native input",
@@ -209,7 +265,35 @@ def doctor():
             if remote and remote.get("archive_healthy")
             else "capture health unverified; inspect status",
         )
-    return dict(ok=not any(c["status"] == "fail" for c in checks), checks=checks)
+    capture_checks = {
+        "ssh",
+        "rsync",
+        "ffmpeg",
+        "nc",
+        "systemctl",
+        "systemd-run",
+        "flock",
+        "host disk reserve",
+        "VM",
+        "VM runtime",
+    }
+    recording_ready = not any(c["status"] == "fail" for c in checks if c["name"] in capture_checks)
+    caption_ready = any(c["name"] == "caption daemon" and c["status"] == "pass" for c in checks)
+    speech_ready = any(
+        c["name"] in ("speech backend", "CPU large standby", "CPU small standby")
+        and c["status"] == "pass"
+        for c in checks
+    )
+    transcription_ready = recording_ready and caption_ready and speech_ready
+    return dict(
+        ok=not any(c["status"] == "fail" for c in checks)
+        and (recording_only or transcription_ready),
+        recording_ready=recording_ready,
+        transcription_ready=transcription_ready,
+        checks=checks,
+        mode="recording_only" if recording_only else "transcription",
+        runtime=runtime_info(),
+    )
 
 
 def main(argv=None):
@@ -227,8 +311,19 @@ def main(argv=None):
             "setup", help="provision a standalone installation and isolated browser VM"
         )
     )
-    for name in ("doctor", "status", "config"):
-        commands.add_parser(name)
+    for name in ("doctor", "status", "config", "info"):
+        command = commands.add_parser(name)
+        if name == "doctor":
+            command.add_argument(
+                "--recording-only",
+                action="store_true",
+                help="check capture readiness without requiring speech models",
+            )
+    notifications = commands.add_parser(
+        "notifications", help="read pending alerts or acknowledge delivered IDs"
+    )
+    notifications.add_argument("--limit", type=int, default=100)
+    notifications.add_argument("--ack", nargs="+", metavar="ID")
     start = commands.add_parser(
         "start", help="join and record; SSH disconnect does not stop VM capture"
     )
@@ -336,8 +431,14 @@ def main(argv=None):
             run_hub(args, lambda value: print(json.dumps(value), flush=True))
         elif args.command == "config":
             emit(runtime_config.CONFIG, args.json)
+        elif args.command == "info":
+            emit(runtime_info(), args.json)
+        elif args.command == "notifications":
+            from live_transcript.integrations.notifications import pending, acknowledge
+
+            emit(acknowledge(args.ack) if args.ack else pending(args.limit), args.json)
         elif args.command == "doctor":
-            result = doctor()
+            result = doctor(recording_only=True) if args.recording_only else doctor()
             emit(result, args.json)
             return 0 if result["ok"] else 1
         elif args.command == "status":
@@ -431,7 +532,7 @@ def main(argv=None):
         elif args.command == "watchdog":
             from live_transcript.runtime.watchdog import main as supervise
 
-            supervise(["--dry-run"] if args.dry_run else [])
+            supervise((["--dry-run"] if args.dry_run else []) + (["--json"] if args.json else []))
         elif args.command == "calendar":
             from live_transcript.integrations.calendar import main as reconcile
 
@@ -446,6 +547,13 @@ def main(argv=None):
             args.json,
         )
         return 130
-    except (ValueError, OSError, KeyError, ImportError, subprocess.SubprocessError) as exc:
+    except (
+        ValueError,
+        OSError,
+        KeyError,
+        ImportError,
+        RuntimeError,
+        subprocess.SubprocessError,
+    ) as exc:
         emit(dict(ok=False, error=type(exc).__name__, detail=str(exc)[:400]), args.json)
         return 1

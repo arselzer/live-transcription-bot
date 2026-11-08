@@ -71,6 +71,7 @@ a {
 }
 .session-badges {
   display: flex;
+  flex-wrap: wrap;
   gap: 9px;
   margin: 0 0 0 auto;
 }
@@ -254,6 +255,30 @@ h2 {
 .panel textarea::placeholder {
   color: #6f819e;
 }
+.input-meta,
+.status-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  color: #91a0b7;
+  font-size: 11px;
+  margin-top: 7px;
+}
+.status-footer {
+  border-top: 1px solid #2b364a;
+  padding-top: 10px;
+  margin-top: 16px;
+}
+.text-button {
+  background: transparent;
+  border-color: transparent;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+.warning {
+  color: #edbd85;
+}
 .checkbox {
   font-size: 11px;
   color: #9baac1;
@@ -282,6 +307,9 @@ h2 {
   color: #7f90aa;
   margin: 10px 0 0;
   line-height: 1.6;
+}
+.panel .micro.warning {
+  color: #edbd85;
 }
 .keys {
   border-top: 1px solid #2b364a;

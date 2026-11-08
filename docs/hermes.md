@@ -5,6 +5,71 @@ browser lifetime, meeting credentials, or the UI backend. Keep deployment paths,
 VPN hostname, meeting invitations, and notification destinations in the private
 installation/agent configuration, not in a committed skill or source file.
 
+## Install and identify the runtime
+
+Install and validate the standalone application first. Copy the reusable
+[Hermes skill template](../examples/hermes/SKILL.md) into your private Hermes
+skills directory and configure the executable and profile there. Do not copy
+another installation's VM addresses, identities, paths, or delivery recipients.
+
+Before scheduling an agent, run the exact executable that its scripts use:
+
+```bash
+live-transcript --config /path/to/profile.toml --json info
+live-transcript --config /path/to/profile.toml --json doctor
+live-transcript --config /path/to/profile.toml --json status
+```
+
+`info` reports the imported package, interpreter, selected profile, data root,
+and VM name. This distinguishes an older executable on PATH from the maintained
+package. Use the same explicit profile for every command, including console,
+calendar, watchdog, recovery, and notification acknowledgement. Keep cron clients
+pinned to that executable; do not use a second copy of the recorder as an adapter.
+
+Doctor reports `recording_ready` separately from `transcription_ready`. It checks
+the speech health endpoint rather than treating a listening port as model
+readiness. Normal doctor exits nonzero when live transcription is unavailable;
+`doctor --recording-only` checks capture without requiring speech model files.
+Neither command removes systemd resource holds or starts another speech model.
+
+## Durable notifications and delivery
+
+The watchdog stores notifications atomically with its event cursor and incident
+deduplication state **before printing**. A failed stdout consumer or failed
+messaging provider leaves them pending. Normal stdout remains a human-readable
+compatibility interface; `--json` returns one versioned object:
+
+```bash
+live-transcript --json watchdog --dry-run
+live-transcript --json watchdog
+live-transcript --json notifications --limit 100
+# Only after the external delivery has succeeded:
+live-transcript --json notifications --ack NOTIFICATION_ID
+```
+
+The report separates current `issues`, newly emitted `messages`, stable-ID
+`notifications`, and `pending_count`. A serialized concurrent watchdog reports
+`busy` rather than starting another repair pass. `--dry-run` creates no watchdog
+state or lock file and does not enqueue notifications or repair services.
+
+Reading notifications does not acknowledge them. A receiver should deduplicate
+by `id`, send only to the user's authorized conversation, and acknowledge only
+the delivered IDs. Repeated recent acknowledgements are safe (the last 1,000
+delivered receipts are retained); an unknown ID rejects the
+whole acknowledgement batch. Unacknowledged repeats retain the same ID. The
+acknowledgement lock waits at most five seconds; if busy, retry the same IDs later.
+The
+owner-only ledger is part of `watchdog-state.json`; malformed retry/delivery
+state is retained and reported, never silently reset.
+
+Hermes script-job stdout delivery alone supplies no delivery acknowledgement
+back to the recorder. Such jobs remain best effort; their pending ledger can be
+read by an agent or delivery adapter after an outage. Do not acknowledge a batch
+merely because a cron script printed it. `created` and `last_seen` describe an
+alert's age; an old pending incident is not proof of current failure. Verify a
+console is still alive before sharing an old capability link, or open a fresh
+console. The core application never calls a messaging provider.
+
 ## Console links and early joining
 
 Start the meeting using the normal `start` command, or let calendar dispatch
@@ -28,7 +93,7 @@ its VM lease deliberately prevents concurrent browser/audio initialization.
 
 ## Event contract
 
-`console --json` emits one JSON object per line. The same events are appended to
+`live-transcript --json console` emits one JSON object per line. The same events are appended to
 an owner-only `console-TOKEN.events.jsonl` under the configured host log path.
 Each includes `id`, UTC seconds, `kind`, `level`, and a human-readable `message`.
 `console_ready` additionally carries `url`, `event_file`, and owner identity.
@@ -37,6 +102,9 @@ The URL is a secret capability; do not post it publicly or quote it in an issue.
 | Kind | Hermes behavior |
 | --- | --- |
 | `console_ready` | Share the private URL once, if delivery is configured. |
+| `admission_needs_operator` | Offer the console within the bounded takeover window; preserve capture. |
+| `admission_admitted` | Admission was confirmed; check capture progress separately. |
+| `admission_rejected` | Admission was not confirmed; do not blindly relaunch. |
 | `capture_attention` | Alert that healthy audio/video capture is unconfirmed. |
 | `capture_pending` | Expected before admission; do not raise a recording incident. |
 | `capture_healthy` | Report a recovery transition; do not infer intelligible speech. |

@@ -155,3 +155,5 @@ include tests/test_operator_console.py
 include docs/operator-console.md
 include docs/hermes.md
 include docs/multiple-meetings.md
+include src/live_transcript/integrations/notifications.py
+include examples/hermes/SKILL.md

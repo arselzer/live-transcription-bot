@@ -18,6 +18,16 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class PackageTests(unittest.TestCase):
+    def test_source_distribution_includes_the_entire_reviewed_inventory(self):
+        from live_transcript.core.source_files import approved_paths
+
+        includes = {
+            line.removeprefix("include ").strip()
+            for line in (ROOT / "MANIFEST.in").read_text().splitlines()
+            if line.startswith("include ")
+        }
+        self.assertEqual(includes, set(approved_paths(ROOT)))
+
     def test_guest_bundle_is_reproducible_and_private(self):
         with tempfile.TemporaryDirectory() as directory:
             first = Path(directory) / "first.pyz"
@@ -167,6 +177,25 @@ class WorkerTests(unittest.TestCase):
         self.assertIsNone(worker.command_env())
         with patch.dict(os.environ, LIVE_TRANSCRIPT_BUNDLE="/guest/live-transcript.pyz"):
             self.assertIsNone(worker.command_env("other-python"))
+
+    def test_legacy_working_directory_cannot_shadow_the_reviewed_child_package(self):
+        from live_transcript.runtime.launcher import environment
+        from live_transcript.worker import command, command_env
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            shadow = root / "live_transcript"
+            shadow.mkdir()
+            (shadow / "__init__.py").write_text("raise RuntimeError('legacy package selected')")
+            for env in (
+                command_env(sys.executable),
+                environment(dict(os.environ, TEST_MARKER="kept")),
+            ):
+                result = subprocess.run(
+                    command("config"), cwd=root, env=env, capture_output=True, text=True, timeout=15
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["google"]["input_mode"], "native")
 
     def test_children_stay_in_the_same_guest_bundle(self):
         from live_transcript.worker import command

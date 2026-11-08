@@ -43,6 +43,17 @@ metrics are fresh; silence is distinct from recognition failure. Screen snapshot
 can preserve speaker evidence when a manual browser has no DOM observer; this
 does not claim reliable structured speaker attribution.
 
+Google admission and evidence capture have separate labels. A green writer during
+prejoin means join evidence is being saved, not that meeting entry succeeded.
+Writer health checks actual file progress as well as its process heartbeat.
+The last-update time makes stale status visible. `Copy status` copies the selected
+VM's health summary without console tokens, VNC passwords, or pasted input;
+the fallback works on ordinary HTTP over a trusted VPN.
+
+The paste box measures UTF-8 bytes and preserves text when sending fails. A timed
+out action can already have reached the VM: inspect the browser before retrying.
+Reconnect and VM switching discard stale status replies from earlier connections.
+
 The guest display is pinned by Xvfb PID, process start time, user, display, and
 private Xauthority file. A restarted/reused display is not silently controlled.
 Lost SSH revokes the manual lease in at most 12 seconds after the last refresh;

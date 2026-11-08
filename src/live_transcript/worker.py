@@ -55,14 +55,15 @@ def command(role, *arguments, python=None):
     return [*prefix, role, *map(str, arguments)]
 
 
-def command_env(python=None):
+def command_env(python=None, *, base=None):
     """Expose checkout source to an ML interpreter without sharing site-packages."""
     if not python or os.environ.get("LIVE_TRANSCRIPT_BUNDLE"):
         return None
     src = Path(__file__).resolve().parent.parent
     if src.name != "src" or not (src.parent / "PUBLIC_SOURCE_FILES.txt").is_file():
         return None  # installed build: the interpreter must provide the package
-    env = dict(os.environ)
+    env = dict(os.environ if base is None else base)
+    env["PYTHONSAFEPATH"] = "1"
     existing = env.get("PYTHONPATH")
     env["PYTHONPATH"] = str(src) + (os.pathsep + existing if existing else "")
     return env

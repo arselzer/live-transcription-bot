@@ -10,13 +10,17 @@ Automatic setup currently supports an x86-64 Linux host with KVM virtualization,
 Python 3.11+, an apt-based distribution, sudo access, and a systemd user manager.
 Allow at least 16 GiB RAM (24 GiB for GPU plus full CPU standby), local disk space
 for the VM/models/recordings, and internet access for the initial downloads.
-The browser always runs inside its own VM.
+The browser always runs inside its own VM. Replace `REPOSITORY_URL` below with
+the clone URL for this repository.
 
 ```bash
+git clone REPOSITORY_URL live-transcription-bot
+cd live-transcription-bot
 ./install.sh --plan
 ./install.sh
 source .venv/bin/activate
 live-transcript doctor
+live-transcript --json info
 ```
 
 `install.sh` prepares the Python environment and runs `live-transcript setup`.
@@ -132,8 +136,9 @@ the bot detects admission and starts captions automatically.
 
 The command deploys the current guest bundle automatically, joins the meeting,
 and follows its log. If the room has a waiting room, the host must admit the bot.
-Meeting capture starts after confirmed admission. Google also keeps an independent
-audio/video archive of the join and recovery sequence before admission. The display name comes from
+Live captions and the convenience WAV start after confirmed admission. Google also
+keeps an independent audio/video archive of the join and recovery sequence before
+admission. The display name comes from
 `identity.name`; override it with `--name 'Meeting Transcript'` if needed.
 
 A Proton invitation's `#pwd-...` fragment is required. Keep real invitations and
@@ -202,11 +207,19 @@ TTS requires `paths.tts` to point to your private Piper installation and voice
 assets; see [deployment](docs/deployment.md#optional-tts). Speech is never enabled
 merely by starting a transcription session.
 
-Hermes uses these same CLI commands. Configure its private skill to call
+Hermes uses these same CLI commands. Start with the reusable
+[Hermes skill template](examples/hermes/SKILL.md), then configure its private copy to call
 `live-transcript start`, `status`, `stop` and `jobs`, and schedule
 `live-transcript watchdog` / `live-transcript calendar` if desired. The core
 application has no Hermes SDK dependency. Calendar integration requires a private
 ICS URL file and the correct `calendar.timezone`.
+
+`live-transcript --json info` identifies the actual package and selected profile;
+check it from the agent's executable rather than assuming every command on PATH
+uses the same installation. `--json watchdog --dry-run` inspects decisions without
+repairs or state writes. The watchdog retains pending alerts durably; clients can
+read them with `--json notifications` and acknowledge delivered IDs explicitly.
+See [the delivery contract](docs/hermes.md#durable-notifications-and-delivery).
 
 ## Troubleshooting
 

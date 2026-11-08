@@ -35,8 +35,9 @@ deleted on failure. Setup never silently overwrites user-edited managed profiles
 
 `--recording-only` skips speech models and services. This is useful for validating
 recording infrastructure; it deliberately provides no live transcription. The
-ordinary doctor also checks speech dependencies, so its speech checks will fail
-in that diagnostic mode. `--no-start-services` prepares full installation without
+ordinary doctor also checks speech dependencies. Use `doctor --recording-only`
+to check capture without requiring speech weights or binaries. Speech endpoints
+remain advisory in that mode. `--no-start-services` prepares full installation without
 launching speech engines. Setup validates audio with a generated tone and reads
 frames from the actual caption-camera device, without joining any provider.
 

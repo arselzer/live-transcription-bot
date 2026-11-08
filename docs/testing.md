@@ -131,6 +131,18 @@ building from the source archive and scanning artifact contents for private data
 
 ## Operator console
 
+The review regressions exercise runtime provenance and legacy-directory import
+shadowing, valid JSON watchdog output, read-only dry runs, durable notification
+handoff before stdout, lost delivery, explicit/repeated acknowledgement, bounded
+acknowledgement locks, and concurrent watchdog/receiver updates. A malformed
+ledger must survive without resetting retry limits or dropping pending alerts.
+
+Browser checks cover desktop and phone layouts, admission/evidence distinction,
+the actual UTF-8 paste limit, retaining input on failed sends, copy-status fallback
+over ordinary HTTP, and excluding tokens/passwords/input from copied diagnostics.
+Use locators or direct reads to await UI state: the console's CSP rejects string
+evaluation, and a live VNC WebSocket prevents generic network-idle waits.
+
 `tests/test_operator_console.py` covers bearer/cookie authentication, Host/Origin
 checks, unauthorized WebSockets, traversal, UTF-8 paste limits, key allowlisting,
 private logs, PID reuse, expired control, partial SSH handshakes, bounded desktop

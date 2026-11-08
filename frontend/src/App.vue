@@ -3,6 +3,7 @@ import { computed, ref, onMounted, onUnmounted } from "vue";
 const state = ref(null),
   events = ref([]),
   error = ref(""),
+  statusError = ref(""),
   notice = ref(""),
   busy = ref(false);
 const text = ref(""),
@@ -26,6 +27,7 @@ let timer,
   clockTimer,
   viewerObserver,
   refreshing = null,
+  connectionAttempt = 0,
   lastInteraction = 0;
 const viewerUrl = computed(
   () =>
@@ -59,6 +61,9 @@ const admissionText = computed(() => {
 const statusAge = computed(() =>
   Math.max(0, (now.value - lastStatusAt.value) / 1000),
 );
+const statusFresh = computed(() => state.value && statusAge.value < 12);
+const textBytes = computed(() => new TextEncoder().encode(text.value).length);
+const pasteTooLarge = computed(() => textBytes.value > 16384);
 const fresh = computed(
   () => capture.value && capture.value.age + statusAge.value < 20,
 );
@@ -75,11 +80,35 @@ function saving(component) {
   );
 }
 const recording = computed(() => saving("audio") && saving("screen"));
+const recordingLabel = computed(() =>
+  recording.value
+    ? admission.value && admission.value.stage !== "admitted"
+      ? "Saving join evidence"
+      : "Recording"
+    : fresh.value
+      ? "Recording needs attention"
+      : statusFresh.value && !capture.value
+        ? "No active recording reported"
+        : "Recording status unknown",
+);
+const captureTitle = computed(() =>
+  recording.value
+    ? admission.value && admission.value.stage !== "admitted"
+      ? "Join evidence is being saved"
+      : "Audio and video are being saved"
+    : statusFresh.value && !capture.value
+      ? "No active recording reported"
+      : "Check recording status",
+);
 const elapsed = computed(() => {
   const seconds =
     (capture.value?.elapsed || 0) +
     (capture.value ? Math.min(statusAge.value, 20) : 0);
-  return `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+  const minutes = Math.floor(seconds / 60);
+  const tail = `${String(minutes % 60).padStart(2, "0")}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`;
+  return minutes >= 60
+    ? `${Math.floor(minutes / 60)}:${tail}`
+    : `${minutes}:${tail.slice(-2)}`;
 });
 const disk = computed(() =>
   capture.value?.free_bytes == null
@@ -90,13 +119,29 @@ const control = computed(
   () => state.value?.control === true && statusAge.value < 12,
 );
 async function api(path, data, retry = true, base = apiBase.value) {
-  const r = await fetch(base + "/api/" + path, {
-    method: data === undefined ? "GET" : "POST",
-    headers: data === undefined ? {} : { "Content-Type": "application/json" },
-    body: data === undefined ? undefined : JSON.stringify(data),
-    cache: "no-store",
-  });
-  const result = await r.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 12000);
+  let r, result;
+  try {
+    r = await fetch(base + "/api/" + path, {
+      method: data === undefined ? "GET" : "POST",
+      headers: data === undefined ? {} : { "Content-Type": "application/json" },
+      body: data === undefined ? undefined : JSON.stringify(data),
+      cache: "no-store",
+      signal: controller.signal,
+    });
+    result = await r.json();
+  } catch (e) {
+    if (e.name === "AbortError")
+      throw new Error(
+        path === "action"
+          ? "No reply from the VM. The action may have completed; check the browser before trying again."
+          : "The VM did not respond in time. Try reconnecting.",
+      );
+    throw e;
+  } finally {
+    clearTimeout(timeout);
+  }
   if (r.status === 401 && path !== "session" && token && retry) {
     await api("session", { token }, false, "");
     return api(path, data, false, base);
@@ -106,40 +151,57 @@ async function api(path, data, retry = true, base = apiBase.value) {
 }
 async function refresh() {
   const base = apiBase.value;
-  if (refreshing === base || !authenticated.value || !vmReady.value) return;
-  refreshing = base;
+  const attempt = connectionAttempt;
+  if (
+    (refreshing?.base === base && refreshing?.attempt === attempt) ||
+    !authenticated.value ||
+    !vmReady.value
+  )
+    return;
+  const request = { base, attempt };
+  refreshing = request;
   try {
     const [status, activity] = await Promise.all([
       api("status", undefined, true, base),
       api("events", undefined, true, base),
     ]);
-    if (base !== apiBase.value) return;
+    if (base !== apiBase.value || attempt !== connectionAttempt) return;
     state.value = status;
     lastStatusAt.value = Date.now();
     now.value = Date.now();
     events.value = activity.events;
-    error.value = "";
+    statusError.value = "";
   } catch (e) {
-    if (base === apiBase.value) error.value = e.message;
+    if (base === apiBase.value && attempt === connectionAttempt)
+      statusError.value = e.message;
   } finally {
-    if (refreshing === base) refreshing = null;
+    if (refreshing === request) refreshing = null;
   }
 }
 async function action(op, values = {}) {
   if (busy.value) return;
+  const attempt = connectionAttempt;
+  if (
+    op === "paste" &&
+    new TextEncoder().encode(values.text || "").length > 16384
+  ) {
+    error.value = "Paste up to 16 KiB at a time. Your text is still here.";
+    return;
+  }
   busy.value = true;
   notice.value = "";
   error.value = "";
   try {
     await api("action", { op, ...values });
+    if (attempt !== connectionAttempt) return;
     notice.value =
       op === "paste"
         ? "Paste sent to the focused VM field. No Enter key pressed."
         : "Key sent to the VM.";
-    if (op === "paste") text.value = "";
+    if (op === "paste" && text.value === values.text) text.value = "";
     await refresh();
   } catch (e) {
-    error.value = e.message;
+    if (attempt === connectionAttempt) error.value = e.message;
   } finally {
     busy.value = false;
   }
@@ -149,6 +211,7 @@ function pasted(event) {
   const value = event.clipboardData?.getData("text/plain");
   if (value) {
     event.preventDefault();
+    text.value = value;
     action("paste", { text: value });
   }
 }
@@ -162,6 +225,7 @@ function attachViewer() {
   const win = viewer.value?.contentWindow;
   const doc = win?.document;
   if (!doc) return;
+  connected.value = doc.documentElement.classList.contains("noVNC_connected");
   doc.addEventListener("pointerdown", interaction);
   doc.addEventListener("keydown", interaction);
   viewerObserver = new MutationObserver(() => {
@@ -180,11 +244,15 @@ async function selectConsole(id) {
   notice.value = "";
   text.value = "";
   error.value = "";
+  statusError.value = "";
   lastStatusAt.value = 0;
   await reconnect();
 }
 async function reconnect() {
   const base = apiBase.value;
+  const attempt = ++connectionAttempt;
+  error.value = "";
+  statusError.value = "";
   viewerObserver?.disconnect();
   vmReady.value = false;
   connected.value = false;
@@ -194,7 +262,7 @@ async function reconnect() {
       await api("session", { token }, false, "");
       session = await api("session", undefined, false, base);
     }
-    if (base !== apiBase.value) return;
+    if (base !== apiBase.value || attempt !== connectionAttempt) return;
     if (!session.authenticated)
       throw new Error("Open a private console login link first.");
     password.value = session.viewer_password || "";
@@ -202,7 +270,47 @@ async function reconnect() {
     vmReady.value = true;
     await refresh();
   } catch (e) {
-    if (base === apiBase.value) error.value = e.message;
+    if (base === apiBase.value && attempt === connectionAttempt)
+      error.value = e.message;
+  }
+}
+async function copyStatus() {
+  const report = JSON.stringify(
+    {
+      captured_at: new Date().toISOString(),
+      vm:
+        consoles.value.find((item) => item.id === selected.value)?.label ||
+        "Current VM",
+      status_age_seconds: Math.round(statusAge.value),
+      display: state.value?.display,
+      control: control.value,
+      admission: admission.value,
+      capture: capture.value,
+      speech: state.value?.speech,
+    },
+    null,
+    2,
+  );
+  try {
+    if (window.isSecureContext && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(report);
+    } else {
+      const field = document.createElement("textarea");
+      field.value = report;
+      field.className = "sr-only";
+      document.body.appendChild(field);
+      try {
+        field.select();
+        if (!document.execCommand("copy")) throw new Error("Copy unavailable");
+      } finally {
+        field.remove();
+      }
+    }
+    notice.value =
+      "Status copied. It contains no console login link or pasted text.";
+  } catch (_) {
+    error.value =
+      "Copy is unavailable in this browser. Status remains visible below.";
   }
 }
 function fullscreen() {
@@ -211,6 +319,8 @@ function fullscreen() {
   });
 }
 async function connect() {
+  error.value = "";
+  statusError.value = "";
   try {
     let session = await api("session", undefined, true, "");
     if (!session.authenticated) {
@@ -259,15 +369,11 @@ onUnmounted(() => {
       </label>
       <div class="session-badges">
         <span class="badge" :class="{ good: connected }"
-          ><i />{{ connected ? "Connected" : "Disconnected" }}</span
-        ><span class="badge" :class="{ recording }"
           ><i />{{
-            recording
-              ? "Recording"
-              : fresh
-                ? "Recording needs attention"
-                : "Recording status unavailable"
+            connected ? "Viewer connected" : "Viewer disconnected"
           }}</span
+        ><span class="badge" :class="{ recording }"
+          ><i />{{ recordingLabel }}</span
         >
       </div>
     </header>
@@ -279,9 +385,9 @@ onUnmounted(() => {
             control ? "Keyboard and mouse enabled" : "View only"
           }}</span>
         </div>
-        <div v-if="error" role="alert" class="banner error">
-          {{ error
-          }}<button @click="authenticated ? refresh() : connect()">
+        <div v-if="error || statusError" role="alert" class="banner error">
+          {{ error || statusError
+          }}<button @click="authenticated ? reconnect() : connect()">
             Retry
           </button>
         </div>
@@ -335,19 +441,37 @@ onUnmounted(() => {
             v-model="text"
             @paste="pasted"
             placeholder="Paste a link or text here…"
-            maxlength="16384"
             :disabled="!control || busy"
-          /><label class="checkbox"
+          />
+          <div class="input-meta">
+            <span :class="{ warning: pasteTooLarge }"
+              >{{ textBytes.toLocaleString() }} / 16,384 bytes</span
+            >
+            <button
+              class="text-button"
+              :disabled="!text || busy"
+              @click="text = ''"
+            >
+              Clear
+            </button>
+          </div>
+          <label class="checkbox"
             ><input type="checkbox" v-model="autoPaste" /> Send immediately when
             I paste</label
           ><button
             class="primary"
-            :disabled="!control || busy || !text"
+            :disabled="!control || busy || !text || pasteTooLarge"
             @click="action('paste', { text })"
           >
-            {{ busy ? "Pasting…" : "Paste into VM" }}
+            {{ busy ? "Sending…" : "Paste into VM" }}
           </button>
-          <p class="micro">Pastes text without pressing Enter.</p>
+          <p class="micro">
+            {{
+              control
+                ? "Pastes text without pressing Enter."
+                : "Open this console with manual control to paste or type."
+            }}
+          </p>
           <div v-if="notice" role="status" class="success-note">
             {{ notice }}
           </div>
@@ -377,11 +501,7 @@ onUnmounted(() => {
           </div>
           <div class="capture-title">
             <h2>
-              {{
-                recording
-                  ? "Audio and video are being saved"
-                  : "Check recording status"
-              }}
+              {{ captureTitle }}
             </h2>
             <span class="duration">{{ elapsed }}</span>
           </div>
@@ -398,8 +518,7 @@ onUnmounted(() => {
             {{ admissionText }}
           </p>
           <p v-if="admission && admission.stage !== 'admitted'" class="micro">
-            Join evidence is being saved. Meeting admission is still
-            unconfirmed.
+            Meeting admission is still unconfirmed.
           </p>
           <div class="health-grid">
             <div>
@@ -443,9 +562,19 @@ onUnmounted(() => {
           <p class="micro" v-if="capture?.speaker_source">
             {{ capture.speaker_source }}
           </p>
-          <p class="micro" v-if="!fresh">
+          <p class="micro" v-if="capture && !fresh">
             Recording status has not updated recently.
           </p>
+          <div class="status-footer">
+            <span>{{
+              lastStatusAt
+                ? `Updated ${Math.floor(statusAge)}s ago`
+                : "Waiting for VM status"
+            }}</span>
+            <button class="text-button" @click="copyStatus" :disabled="!state">
+              Copy status
+            </button>
+          </div>
         </section>
         <section class="panel activity">
           <div class="panel-title">

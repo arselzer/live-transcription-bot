@@ -18,7 +18,6 @@ import datetime as dt
 import json
 import os
 import re
-import sys
 import time
 import urllib.request
 import fcntl
@@ -171,7 +170,6 @@ def meeting_active():
 
 def storage_maintenance():
     # Defer launches without consuming the event's dedupe key during VM moves.
-    sys.path.insert(0, get("paths", "root"))
     from live_transcript.storage.layout import maintenance_active
 
     return maintenance_active()

@@ -14,6 +14,74 @@ from tools.benchmark_audio_conditions import transform
 
 
 class ConfigurationTests(unittest.TestCase):
+    def test_recording_only_preflight_does_not_claim_speech_is_ready(self):
+        from live_transcript import cli
+
+        vm = dict(
+            playwright=True,
+            xvfb=True,
+            ffmpeg=True,
+            audio=True,
+            camera=False,
+            native_input=True,
+            free=10 * 1024**3,
+        )
+        connection = MagicMock()
+        connection.__enter__.return_value.makefile.return_value.__enter__.return_value.readline.return_value = b'{"util":0}\n'
+        with (
+            patch.object(cli.shutil, "which", return_value="/usr/bin/tool"),
+            patch.object(cli.shutil, "disk_usage", return_value=MagicMock(free=100 * 1024**3)),
+            patch.object(cli.socket, "create_connection", return_value=connection),
+            patch.object(cli.urllib.request, "urlopen", side_effect=OSError("offline")),
+            patch.object(cli.subprocess, "run", return_value=MagicMock(stdout=json.dumps(vm))),
+            patch.object(cli, "current", return_value=dict(status="idle")),
+            patch.object(cli, "runtime_info", return_value={}),
+        ):
+            result = cli.doctor(recording_only=True)
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["recording_ready"])
+        self.assertFalse(result["transcription_ready"])
+        self.assertFalse(any(row["name"] == "model" for row in result["checks"]))
+
+    def test_watchdog_json_dry_run_is_read_only_on_an_unconfigured_workspace(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            workspace = root / "not-created"
+            config = root / "profile.toml"
+            config.write_text("[paths]\nroot=" + json.dumps(str(workspace)))
+            result = subprocess.run(
+                [
+                    "python3",
+                    "-m",
+                    "live_transcript",
+                    "--config",
+                    str(config),
+                    "--json",
+                    "watchdog",
+                    "--dry-run",
+                ],
+                capture_output=True,
+                text=True,
+                timeout=20,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue(json.loads(result.stdout)["dry_run"])
+            self.assertFalse(workspace.exists())
+
+    def test_runtime_info_identifies_the_loaded_package_and_selected_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            config = Path(directory) / "profile.toml"
+            config.write_text("")
+            result = subprocess.check_output(
+                ["python3", "-m", "live_transcript", "--config", str(config), "--json", "info"],
+                text=True,
+                timeout=15,
+            )
+            info = json.loads(result)
+            self.assertEqual(info["config"], str(config))
+            self.assertTrue(info["package"].endswith("live_transcript"))
+            self.assertIn("python", info)
+
     def test_unknown_option_and_wrong_type_fail_before_start(self):
         for text in (
             "[caption]\nporrt=8099",
@@ -78,6 +146,138 @@ class ConfigurationTests(unittest.TestCase):
             data = json.loads(reply)
             self.assertEqual(data["caption"]["port"], 8765)
             self.assertEqual(data["paths"]["logs"], d + "/logs")
+
+
+class NotificationHandoffTests(unittest.TestCase):
+    def test_busy_acknowledgement_is_bounded_and_keeps_pending_alerts(self):
+        import fcntl
+
+        self.publish()
+        ident = self.notifications.pending()["notifications"][0]["id"]
+        original = self.path.read_bytes()
+        with open(str(self.path) + ".lock", "a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            with patch.object(self.notifications, "LOCK_TIMEOUT_SECONDS", 0):
+                with self.assertRaisesRegex(RuntimeError, "busy"):
+                    self.notifications.acknowledge([ident])
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_systemd_condition_holds_are_reported_without_overriding_them(self):
+        from live_transcript.runtime import watchdog
+
+        def run(args, **kwargs):
+            return MagicMock(returncode=0, stdout="ConditionResult=no\nActiveState=inactive\n")
+
+        with (
+            patch.object(watchdog.socket, "create_connection", side_effect=OSError("offline")),
+            patch.object(watchdog.subprocess, "run", side_effect=run) as calls,
+        ):
+            result = watchdog.ensure_backend()
+        self.assertTrue(result)
+        self.assertTrue(all("held by systemd conditions" in message for message in result.values()))
+        self.assertTrue(all(call.args[0][0] == "systemctl" for call in calls.call_args_list))
+        self.assertFalse(any("restart" in call.args[0] for call in calls.call_args_list))
+
+    def setUp(self):
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.path = Path(self.temporary.name) / "watchdog-state.json"
+        from live_transcript.integrations import notifications
+
+        self.notifications = notifications
+        patcher = patch.object(notifications, "state_path", return_value=self.path)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def publish(self, state=None, now=10000):
+        from live_transcript.runtime import watchdog
+
+        state = {} if state is None else state
+        with (
+            patch.object(watchdog, "STATE", self.path),
+            patch.object(watchdog.time, "time", return_value=now),
+        ):
+            watchdog.deliver(state, {"audio": "Capture needs attention"})
+        return state
+
+    def test_reading_and_repeated_watchdog_runs_keep_the_same_unacknowledged_id(self):
+        state = self.publish()
+        first = self.notifications.pending()
+        original = self.path.read_bytes()
+        self.assertEqual(self.notifications.pending(), first)
+        self.assertEqual(self.path.read_bytes(), original)
+        self.publish(state, now=11000)
+        second = self.notifications.pending()
+        self.assertEqual(second["pending_count"], 1)
+        self.assertEqual(second["notifications"][0]["id"], first["notifications"][0]["id"])
+        self.assertEqual(self.path.stat().st_mode & 0o777, 0o600)
+
+    def test_acknowledgement_is_explicit_idempotent_and_does_not_lose_future_incidents(self):
+        self.publish()
+        ident = self.notifications.pending()["notifications"][0]["id"]
+        self.notifications.acknowledge([ident])
+        self.notifications.acknowledge([ident])
+        self.assertEqual(self.notifications.pending()["pending_count"], 0)
+        self.publish(self.notifications.load_state(self.path), now=12000)
+        self.assertNotEqual(self.notifications.pending()["notifications"][0]["id"], ident)
+
+    def test_unknown_acknowledgement_leaves_all_alerts_intact(self):
+        self.publish()
+        original = self.path.read_bytes()
+        with self.assertRaises(ValueError):
+            self.notifications.acknowledge(["f" * 32])
+        self.assertEqual(self.path.read_bytes(), original)
+
+    def test_corrupt_retry_or_notification_state_is_preserved(self):
+        for content in (
+            "[]",
+            '{"rejoins":[]}',
+            '{"issues":{"audio":[]}}',
+            '{"notifications":{"bad":{}}}',
+            '{"rejoins":{"incident":-1}}',
+        ):
+            with self.subTest(content=content):
+                self.path.write_text(content)
+                with self.assertRaises(ValueError):
+                    self.notifications.pending()
+                self.assertEqual(self.path.read_text(), content)
+
+    def test_stdout_failure_cannot_erase_a_pending_notification(self):
+        from live_transcript.runtime import watchdog
+
+        with (
+            patch.object(watchdog, "STATE", self.path),
+            patch.object(watchdog, "tick", return_value={"audio": "Capture needs attention"}),
+            patch.object(watchdog, "ensure_backend"),
+            patch.object(watchdog, "recovery_issues", return_value={}),
+            patch("live_transcript.runtime.operator.console_notifications", return_value={}),
+            patch("builtins.print", side_effect=BrokenPipeError),
+        ):
+            with self.assertRaises(BrokenPipeError):
+                watchdog.main([])
+        self.assertEqual(self.notifications.pending()["pending_count"], 1)
+
+    def test_delivery_ack_waits_for_the_watchdog_transaction(self):
+        import threading
+        from live_transcript.core.files import atomic_json
+
+        self.publish()
+        ident = self.notifications.pending()["notifications"][0]["id"]
+        finished = threading.Event()
+
+        def acknowledge():
+            self.notifications.acknowledge([ident])
+            finished.set()
+
+        with self.notifications.locked_state(self.path) as state:
+            thread = threading.Thread(target=acknowledge)
+            thread.start()
+            self.assertFalse(finished.wait(0.05))
+            state["run_id"] = "another-run"
+            atomic_json(self.path, state)
+        thread.join(timeout=2)
+        self.assertTrue(finished.is_set())
+        self.assertEqual(self.notifications.load_state(self.path)["run_id"], "another-run")
 
 
 class RecoveryPolicyTests(unittest.TestCase):

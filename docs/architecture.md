@@ -42,6 +42,12 @@ SSH orchestration and detached backup/retrieval jobs; Python owns configuration,
 state transitions and guest lifecycle. Browser/audio operator modules and final
 processing perform work only from explicit entrypoints.
 
+`info` exposes runtime provenance so a client can detect an obsolete executable
+or wrong profile before operating a VM. Checkout child processes use an explicit
+source path and Python safe-path mode; a legacy working directory must not shadow
+the maintained package. Installed wheels still use their selected interpreter's
+own package rather than borrowing another environment's site-packages.
+
 ## Module boundaries
 
 Paths below are relative to `src/live_transcript/`.
@@ -61,6 +67,7 @@ Paths below are relative to `src/live_transcript/`.
 | Presentation | `presentation/`, `notes/board.py` | 4:3 camera; crop-safe captions; evidence-grounded summary hints |
 | Retrieval/processing | `storage/pull.py`, `storage/worker.py`, `runtime/postprocess.py` | Verify inventory; retain originals; report gaps; checkpoint stages |
 | Supervision | `runtime/watchdog.py` | Unknown is not dead; bounded restart; preserve deadline |
+| Notification handoff | `integrations/notifications.py` | Pending IDs committed with watchdog state; explicit acknowledgement after external delivery |
 | Admission/UI rescue | `providers/admission.py`, `providers/google_admission.py`, `providers/rescue.py` | Scoped evidence; trusted controls; stale-plan rejection; bounded actions |
 
 ## Lifecycle
@@ -91,6 +98,13 @@ uncertainties remain and should not be described as sample-accurate alignment.
 Finalization writes inventory hashes before the completion marker. Mutable WAV
 headers require checksum copies, not append-only replication. A source is retained
 even after verified retrieval; deletion is an operator retention decision.
+
+Notification delivery is a separate failure boundary too. Console-event cursors,
+incident cooldowns, and pending notifications are committed together before
+stdout is written. Reading is not a delivery receipt. A failed client can read
+pending IDs later; acknowledgements serialize with the watchdog. Core code does
+not know Hermes recipients or call a messaging provider. An unacknowledged alert
+records an observation and its age; it does not assert an ongoing incident.
 
 The live uploader isolates unreadable audio packets by capture generation. A
 damaged final WAV after a streamer interruption stays on disk with a `read_error`

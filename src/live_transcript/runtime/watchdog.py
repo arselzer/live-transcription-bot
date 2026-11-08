@@ -127,12 +127,15 @@ def recovery_options(meeting, now):
 def ensure_backend():
     from urllib.parse import urlsplit
 
-    endpoints = [(get("caption", "stt_url"), get("services", "primary"))]
+    issues = {}
+    endpoints = [("primary", get("caption", "stt_url"), get("services", "primary"))]
     if get("asr", "cpu_fallback"):
-        endpoints.append((get("asr", "cpu_url"), get("services", "cpu_large")))
+        endpoints.append(("cpu-large", get("asr", "cpu_url"), get("services", "cpu_large")))
         if get("asr", "adaptive_model"):
-            endpoints.append((get("asr", "small_cpu_url"), get("services", "cpu_small")))
-    for url, unit in endpoints:
+            endpoints.append(
+                ("cpu-small", get("asr", "small_cpu_url"), get("services", "cpu_small"))
+            )
+    for role, url, unit in endpoints:
         if not unit:
             continue  # an external supervisor owns this endpoint
         endpoint = urlsplit(url)
@@ -149,7 +152,34 @@ def ensure_backend():
                     timeout=5,
                 )
                 if result.returncode:
-                    raise RuntimeError("could not start " + unit)
+                    issues["speech-backend-" + role] = (
+                        "Speech service start was rejected; archival recording is independent"
+                    )
+                    continue
+                status = subprocess.run(
+                    [
+                        "systemctl",
+                        "--user",
+                        "show",
+                        unit,
+                        "--property=ConditionResult",
+                        "--property=ActiveState",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                fields = dict(
+                    line.split("=", 1) for line in status.stdout.splitlines() if "=" in line
+                )
+                if fields.get("ConditionResult") == "no" and fields.get("ActiveState") in (
+                    "inactive",
+                    "failed",
+                ):
+                    issues["speech-backend-" + role] = (
+                        "Speech service is held by systemd conditions; the hold was preserved and source recording is independent"
+                    )
+    return issues
 
 
 def pending_alive(state, now):
@@ -415,31 +445,51 @@ def deliver(state, issues, dry_run=False):
     messages = []
     for key, value in issues.items():
         previous = old.get(key, {})
-        if now - previous.get("at", 0) >= COOLDOWN:
-            messages.append(f"Live Transcript [{key}]: {value}")
-            previous = dict(at=now)
+        fingerprint = hashlib.sha256(value.encode()).hexdigest()
+        if now - previous.get("at", 0) >= COOLDOWN or previous.get("fingerprint") != fingerprint:
+            messages.append((key, f"Live Transcript [{key}]: {value}"))
+            previous = dict(at=now, fingerprint=fingerprint)
         current[key] = previous
     state["issues"] = current
+    from live_transcript.integrations.notifications import enqueue
+
+    notifications = [] if dry_run else enqueue(state, messages, now)
     if not dry_run:
+        # Commit the outbox and event cursor together before any stdout write.
+        # A broken pipe or failed Hermes delivery cannot erase pending alerts.
         atomic_json(STATE, state)
-    if messages:
-        print("\n".join(messages))
+    return dict(
+        version=1,
+        dry_run=dry_run,
+        issues=issues,
+        messages=[message for _, message in messages],
+        notifications=notifications,
+        pending_count=len(state.get("notifications", {})),
+        delivery="unacknowledged",
+    )
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--json", action="store_true")
     a = ap.parse_args(argv)
-    STATE.parent.mkdir(parents=True, exist_ok=True)
-    with open(str(STATE) + ".lock", "a") as lock:
+    from contextlib import nullcontext
+
+    if not a.dry_run:
+        STATE.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with nullcontext() if a.dry_run else open(str(STATE) + ".lock", "a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            if lock is not None:
+                os.fchmod(lock.fileno(), 0o600)
+                fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
+            if a.json:
+                print(json.dumps(dict(version=1, busy=True, messages=[], notifications=[])))
             return
-        try:
-            state = json.loads(STATE.read_text())
-        except (OSError, ValueError):
-            state = {}
+        from live_transcript.integrations.notifications import load_state
+
+        state = load_state(STATE)
         history = state.get("rejoins", {})
         for key in list(history):
             if ":https://" in key:
@@ -449,7 +499,7 @@ def main(argv=None):
         backend_issues = {}
         if not a.dry_run:
             try:
-                ensure_backend()
+                backend_issues.update(ensure_backend() or {})
             except Exception as exc:
                 backend_issues["speech-backend-start"] = (
                     f"{type(exc).__name__}; archival audio is independent"
@@ -463,7 +513,11 @@ def main(argv=None):
         from live_transcript.runtime.operator import console_notifications
 
         issues.update(console_notifications(state))
-        deliver(state, issues, a.dry_run)
+        report = deliver(state, issues, a.dry_run)
+        if a.json:
+            print(json.dumps(report, ensure_ascii=False), flush=True)
+        elif report["messages"]:
+            print("\n".join(report["messages"]), flush=True)
 
 
 if __name__ == "__main__":

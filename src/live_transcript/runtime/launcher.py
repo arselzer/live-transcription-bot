@@ -11,7 +11,14 @@ def command(*arguments):
 
 
 def environment(base=None):
-    return dict(os.environ if base is None else base, LIVE_TRANSCRIPT_PYTHON=sys.executable)
+    from live_transcript.worker import command_env
+
+    env = dict(
+        os.environ if base is None else base,
+        LIVE_TRANSCRIPT_PYTHON=sys.executable,
+        PYTHONSAFEPATH="1",
+    )
+    return command_env(sys.executable, base=env) or env
 
 
 def start(*arguments):
