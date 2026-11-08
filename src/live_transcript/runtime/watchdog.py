@@ -154,7 +154,8 @@ def ensure_backend():
                 )
                 if result.returncode:
                     issues["speech-backend-" + role] = (
-                        "Speech service start was rejected; archival recording is independent"
+                        "Speech service start was deferred by systemd conditions; "
+                        "the hold was preserved and source recording is independent"
                     )
                     continue
                 status = subprocess.run(
@@ -178,7 +179,8 @@ def ensure_backend():
                     "failed",
                 ):
                     issues["speech-backend-" + role] = (
-                        "Speech service is held by systemd conditions; the hold was preserved and source recording is independent"
+                        "Speech service start was deferred by systemd conditions; "
+                        "the hold was preserved and source recording is independent"
                     )
     return issues
 

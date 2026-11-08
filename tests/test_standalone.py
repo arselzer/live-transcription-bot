@@ -174,7 +174,7 @@ class NotificationHandoffTests(unittest.TestCase):
         ):
             result = watchdog.ensure_backend()
         self.assertTrue(result)
-        self.assertTrue(all("held by systemd conditions" in message for message in result.values()))
+        self.assertTrue(all("deferred by systemd conditions" in message for message in result.values()))
         self.assertTrue(all(call.args[0][0] == "systemctl" for call in calls.call_args_list))
         self.assertFalse(any("restart" in call.args[0] for call in calls.call_args_list))
 
