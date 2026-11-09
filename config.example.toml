@@ -37,6 +37,7 @@ cpu_large = "whisper-stt-cpu.service"
 cpu_small = "whisper-stt-cpu-small.service"
 
 [audio]
+# extra_startup_file = ""  # optional .pa include for lab rigs (test speaker sinks)
 microphone_device = "hw:0,0"
 microphone_source = "alsa_input.hw_0_0"
 sink = "transcript"

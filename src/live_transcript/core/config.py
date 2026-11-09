@@ -73,6 +73,7 @@ DEFAULTS = {
         "sink": "transcript",
         "microphone_device": "hw:0,0",
         "microphone_source": "alsa_input.hw_0_0",
+        "extra_startup_file": "",
     },
     "google": {
         "input_mode": "native",

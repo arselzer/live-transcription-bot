@@ -28,7 +28,7 @@ def startup_script(sink, device, source):
         raise ValueError("Microphone device must identify an ALSA hardware device")
     # No udev auto-profiles: they would compete with the explicit dummy source
     # for the same PCM. Do not include suspend-on-idle, which can starve WebRTC.
-    return (
+    content = (
         "# Managed browser VM audio devices\n.fail\n"
         "load-module module-native-protocol-unix\n"
         f"load-module module-null-sink sink_name={sink} rate=48000 channels=2 "
@@ -37,6 +37,12 @@ def startup_script(sink, device, source):
         "rate=48000 channels=2 source_properties=device.description=BotMic\n"
         f"set-default-sink {sink}\nset-default-source {source}\n"
     )
+    # Lab escape hatch (e.g. a scripted test speaker feeding an extra null-sink).
+    # Unset by default, so production PulseAudio config stays byte-identical.
+    extra = str(get("audio", "extra_startup_file") or "").strip()
+    if extra and re.fullmatch(r"[A-Za-z0-9/._-]{1,255}", extra) and Path(extra).is_file():
+        content += f".include {extra}\n"
+    return content
 
 
 def server_identity():
