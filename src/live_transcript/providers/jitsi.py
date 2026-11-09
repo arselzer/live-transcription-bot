@@ -309,11 +309,12 @@ def run(argv=None):
         with sync_playwright() as p:
             try:
                 if not a.dry:
-                    # Pre-arm only the camera writer, not audio capture, before Chrome
-                    # enumerates V4L2. The renderer must win the device format race.
+                    # Transcription needs audio only. Deliberately no camera renderer:
+                    # v4l2loopback refuses a Chrome reader while the writer holds the
+                    # device, and Jitsi's pre-join device probe fails closed on that,
+                    # bouncing the bot back to the pre-join screen with a media-access
+                    # modal. Without a writer, the probe opens the loopback cleanly.
                     Path("/tmp/cap_session_start").write_text(str(int(time.time())))
-                    renderer = children.start(worker_command("render"), "/tmp/jitsi-render.log")
-                    time.sleep(3)
                 ctx = p.chromium.launch_persistent_context(
                     str(VM_HOME / "chrome-jitsi-prof"),
                     headless=False,
@@ -429,9 +430,7 @@ def run(argv=None):
                 missing_since = None
                 next_stats = 0
                 last_audio_bytes = 0
-                next_camera_attempt = 0
                 next_streamer_attempt = 0
-                renderer_started = time.monotonic()
                 while time.monotonic() - t0 < a.max_min * 60:
                     if pg.is_closed():
                         raise RuntimeError("Meeting tab closed unexpectedly")
@@ -457,11 +456,6 @@ def run(argv=None):
                     else:
                         missing_since = None
                         click_if_visible(pg, "Mute microphone")
-                        if now >= next_camera_attempt:
-                            click_if_visible(pg, "Start camera") or click_if_visible(
-                                pg, "Turn on camera"
-                            )
-                            next_camera_attempt = now + 15
                     if audio.poll() is not None:
                         # The full-quality lossless archive remains independent.
                         # Never abandon the call because the convenience WAV died.
@@ -490,23 +484,6 @@ def run(argv=None):
                             str(out) + ".ffmpeg.log",
                         )
                         event(archive.root, "primary_capture_started", file=fallback.name)
-                    hb = Path("/tmp/caprender.hb")
-                    stale = now - renderer_started > 20 and (
-                        not hb.exists() or time.time() - hb.stat().st_mtime > 20
-                    )
-                    if renderer.poll() is not None or stale:
-                        # Release Chrome's camera reader before restarting a stalled
-                        # writer, so the writer wins the V4L2 format negotiation.
-                        click_if_visible(pg, "Stop camera") or click_if_visible(
-                            pg, "Turn off camera"
-                        )
-                        children.stop(renderer)
-                        renderer = children.start(
-                            worker_command("render"),
-                            "/tmp/jitsi-render.log",
-                        )
-                        renderer_started = now
-                        next_camera_attempt = now + 5
                     if streamer.poll() is not None and now >= next_streamer_attempt:
                         print(
                             "Caption streamer stopped; recording continues while captions restart",
