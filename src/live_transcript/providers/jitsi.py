@@ -97,8 +97,15 @@ def click_if_visible(pg, label):
 
 
 def joined(pg):
+    """Leave control also renders on the 2026 pre-join toolbar; require an
+    in-call-only control (the mic toggle sits in the call toolbar only)."""
     try:
-        return visible(leave_control(pg))
+        if not visible(leave_control(pg)):
+            return False
+        return any(
+            visible(pg.get_by_role("button", name=label).first)
+            for label in ("Mute microphone", "Unmute microphone")
+        )
     except Exception:
         return False
 
@@ -327,6 +334,13 @@ def run(argv=None):
                         "--hide-crash-restore-bubble",
                         "--autoplay-policy=no-user-gesture-required",
                         "--use-fake-ui-for-media-stream",
+                        # Jitsi's pre-join device check runs a combined
+                        # getUserMedia({audio,video}); without a video device it
+                        # fails with NotFoundError and the bot never joins. The
+                        # synthetic device satisfies the check; the loopback stays
+                        # untouched for whoever else needs it. The fake sine uplink
+                        # is muted immediately after joining.
+                        "--use-fake-device-for-media-stream",
                         "--remote-debugging-port=9222",
                         "--remote-debugging-address=127.0.0.1",
                     ],
