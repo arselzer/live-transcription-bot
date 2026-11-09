@@ -438,6 +438,7 @@ def write_vm_config(destination):
         "recovery": CONFIG["recovery"],
         "admission": CONFIG["admission"],
         "identity": CONFIG["identity"],
+        "providers": CONFIG["providers"],
         "model": CONFIG["model"],
         "paths": {"root": home},
         "vm": {"home": home, "python": get("vm", "python")},

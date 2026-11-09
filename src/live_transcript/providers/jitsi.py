@@ -325,6 +325,7 @@ def run(argv=None):
                         "--no-sandbox",
                         "--hide-crash-restore-bubble",
                         "--autoplay-policy=no-user-gesture-required",
+                        "--use-fake-ui-for-media-stream",
                         "--remote-debugging-port=9222",
                         "--remote-debugging-address=127.0.0.1",
                     ],
