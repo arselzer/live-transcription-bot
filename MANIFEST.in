@@ -43,6 +43,7 @@ include src/live_transcript/providers/browser.py
 include src/live_transcript/providers/google_admission.py
 include src/live_transcript/providers/google_meet.py
 include src/live_transcript/providers/interaction.py
+include src/live_transcript/providers/jitsi.py
 include src/live_transcript/providers/proton.py
 include src/live_transcript/providers/rescue.py
 include src/live_transcript/providers/video.py
@@ -98,6 +99,7 @@ include tests/test_meeting_board.py
 include tests/test_meeting_session.py
 include tests/test_name_fallbacks.py
 include tests/test_package_layout.py
+include tests/test_jitsi.py
 include tests/test_proton_meet.py
 include tests/test_readiness.py
 include tests/test_recording_guard.py

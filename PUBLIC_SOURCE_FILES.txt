@@ -43,6 +43,7 @@ src/live_transcript/providers/browser.py
 src/live_transcript/providers/google_admission.py
 src/live_transcript/providers/google_meet.py
 src/live_transcript/providers/interaction.py
+src/live_transcript/providers/jitsi.py
 src/live_transcript/providers/proton.py
 src/live_transcript/providers/rescue.py
 src/live_transcript/providers/video.py
@@ -98,6 +99,7 @@ tests/test_meeting_board.py
 tests/test_meeting_session.py
 tests/test_name_fallbacks.py
 tests/test_package_layout.py
+tests/test_jitsi.py
 tests/test_proton_meet.py
 tests/test_readiness.py
 tests/test_recording_guard.py

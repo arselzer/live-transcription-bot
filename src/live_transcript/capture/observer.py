@@ -33,6 +33,10 @@ def speaker_script(provider):
         from live_transcript.providers.google_meet import SPEAKERS_JS
 
         return SPEAKERS_JS
+    if provider == "jitsi":
+        from live_transcript.providers.jitsi import SPEAKERS_JS
+
+        return SPEAKERS_JS
     if provider == "zoom":
         return ZOOM_SPEAKERS_JS
     raise ValueError("Unsupported evidence provider")

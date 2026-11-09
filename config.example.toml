@@ -66,6 +66,12 @@ google_private = true
 # Optional absolute executable path inside the VM; default is Playwright's Chromium.
 # google_executable = "/path/to/google-chrome"
 
+[providers]
+# Self-hosted Jitsi Meet hostnames (comma-separated) the bot may join, e.g.
+# "meet.example.org, 192.0.2.10". The *.jit.si domains are always accepted.
+# Rooms join as guests by https://<host>/<room-name>; no passcode by default.
+jitsi_hosts = ""
+
 [caption]
 # Optional guest-facing hostname when it differs from the controller address.
 guest_host = ""

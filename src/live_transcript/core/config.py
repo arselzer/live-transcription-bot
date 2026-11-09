@@ -82,6 +82,7 @@ DEFAULTS = {
         "operator_recovery_seconds": 120.0,
     },
     "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
+    "providers": {"jitsi_hosts": ""},
     "capacity": {
         "recording_bytes_per_minute": 33554432,
         "host_copy_factor": 2,

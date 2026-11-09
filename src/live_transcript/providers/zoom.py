@@ -110,6 +110,10 @@ def main(name_retry_allowed=False, absolute_deadline=None):
 
     if len(sys.argv) > 1 and is_proton_url(sys.argv[1]):
         return run_proton(sys.argv[1:])
+    from live_transcript.providers.jitsi import is_jitsi_url, run as run_jitsi
+
+    if len(sys.argv) > 1 and is_jitsi_url(sys.argv[1]):
+        return run_jitsi(sys.argv[1:])
     from live_transcript.providers.google_meet import is_google_url, run as run_google
 
     if len(sys.argv) > 1 and is_google_url(sys.argv[1]):
@@ -1217,6 +1221,7 @@ def run_with_name_fallbacks():
     from live_transcript.core.options import rejoin_options
     from live_transcript.providers.proton import is_proton_url
     from live_transcript.providers.google_meet import is_google_url
+    from live_transcript.providers.jitsi import is_jitsi_url
 
     original = list(sys.argv)
     if (
@@ -1224,6 +1229,7 @@ def run_with_name_fallbacks():
         or "--dry" in original
         or is_proton_url(original[1])
         or is_google_url(original[1])
+        or is_jitsi_url(original[1])
     ):
         return main()
     options, minutes = rejoin_options(original[2:])

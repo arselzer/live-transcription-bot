@@ -39,7 +39,14 @@ def validate_invitation(url):
 
             validate_google(url)
         else:
-            zoom_invitation(url)
+            from live_transcript.providers.jitsi import is_jitsi_url
+
+            if is_jitsi_url(url):
+                from live_transcript.providers.jitsi import validate_url as validate_jitsi
+
+                validate_jitsi(url)
+            else:
+                zoom_invitation(url)
 
 
 def begin(url, args, directory=None):
