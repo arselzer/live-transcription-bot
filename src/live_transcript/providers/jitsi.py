@@ -351,7 +351,12 @@ def run(argv=None):
                 ctx.add_init_script(MIC_SCRIPT)
                 pg = ctx.new_page()
                 pg.on("dialog", lambda dialog: dialog.dismiss())
-                pg.goto(a.meeting, wait_until="domcontentloaded", timeout=60000)
+                # Join muted via per-join config override: the launch flags
+                # fabricate a sine-wave mic (fake video device is required by
+                # the prejoin), and a missed mute click would flood the room
+                # mix with that tone.
+                join_url = a.meeting.split("#", 1)[0] + "#config.startWithAudioMuted=true"
+                pg.goto(join_url, wait_until="domcontentloaded", timeout=60000)
                 if a.dry:
                     pg.wait_for_timeout(5000)
                     pg.screenshot(path=str(out.parent / "jitsi-prejoin.png"))
