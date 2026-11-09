@@ -12,6 +12,8 @@ Synthetic demo with fictional participants: captions arrive, the reader searches
 the transcript, then switches to the isolated VM console. The workspace shows
 recording health separately from recognition, with optional draft meeting notes.
 See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
+For repeatable Jitsi speech tests and accuracy comparisons, see
+[the transcription lab](docs/transcription-lab.md).
 
 ## Quick start with Docker
 

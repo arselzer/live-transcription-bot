@@ -176,6 +176,23 @@ def prejoin(pg, name, timeout=330):
     while time.monotonic() < end:
         try:
             if joined(pg):
+                # With prejoin disabled there is no name field. Use the same
+                # scoped settings action as Jitsi's external display-name API.
+                from live_transcript.runtime.console import operator_control_active
+
+                if not operator_control_active():
+                    optional_feature(
+                        lambda: pg.evaluate(
+                            """name => {
+                      const store=window.APP?.store;
+                      if(!store?.dispatch)return false;
+                      store.dispatch({type:'SETTINGS_UPDATED',settings:{displayName:name}});
+                      return true;
+                    }""",
+                            name,
+                        ),
+                        "participant name",
+                    )
                 return
             from live_transcript.runtime.console import operator_control_active
 
@@ -247,7 +264,7 @@ SPEAKERS_JS = """() => {
        role:p.id===state.dominantSpeaker || p.dominantSpeaker===true ? 'active':'tile'}));
    }
  } catch (_) {}
- return [...document.querySelectorAll('[id^="participant-"]')].map(e => ({
+ return [...document.querySelectorAll('.videocontainer[id^="participant_"],#localVideoContainer,[id^="participant-"]')].map(e => ({
   role: e.querySelector('.dominant-speaker') || (e.className||'').includes('dominant-speaker')
     ? 'active' : 'tile',
   name: ((e.querySelector('.displayname')?.textContent
@@ -380,7 +397,7 @@ def run(argv=None):
                         # untouched for whoever else needs it. The fake sine uplink
                         # is muted immediately after joining.
                         "--use-fake-device-for-media-stream",
-                        "--remote-debugging-port=9222",
+                        "--remote-debugging-port=" + str(get("browser", "jitsi_debug_port")),
                         "--remote-debugging-address=127.0.0.1",
                     ],
                     viewport={"width": 1280, "height": 800},
@@ -412,7 +429,12 @@ def run(argv=None):
                 (VM_HOME / "rec" / "speakers.jsonl").write_text("")
                 Path("/tmp/cap_session_start").write_text(str(started))
                 archive = Archive(out)
-                archive.start(started, a.max_min * 60, provider="jitsi")
+                archive.start(
+                    started,
+                    a.max_min * 60,
+                    provider="jitsi",
+                    cdp="http://127.0.0.1:" + str(get("browser", "jitsi_debug_port")),
+                )
                 print("ARCHIVE to", archive.root, flush=True)
                 # Record immediately after admission, before camera setup delays.
                 audio = children.start(

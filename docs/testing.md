@@ -59,6 +59,13 @@ GPU reset and must be described accordingly.
 locally fulfilled provider pages. They check bounded model selection, stale plans,
 provider-denial diagnostics and meeting-chat isolation without real joins.
 
+## Repeatable Jitsi lab
+
+`live-transcript lab jitsi` creates an owned test room, runs timed speakers and
+compares live/final output against retained reference audio. It can use an owned
+full-model GPU/CPU server and compare accuracy against a previous run. See the
+[lab guide](transcription-lab.md) for isolation, custom plans and recovery.
+
 ## Audio accuracy matrix
 
 `benchmark_audio_conditions.py --plan PLAN --output REPORT` transforms copies of

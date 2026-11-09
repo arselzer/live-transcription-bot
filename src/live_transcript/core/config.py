@@ -82,7 +82,12 @@ DEFAULTS = {
         "manual_join": False,
         "operator_recovery_seconds": 120.0,
     },
-    "browser": {"google_mode": "cdp", "google_executable": "", "google_private": True},
+    "browser": {
+        "google_mode": "cdp",
+        "google_executable": "",
+        "google_private": True,
+        "jitsi_debug_port": 9222,
+    },
     "providers": {"jitsi_hosts": ""},
     "capacity": {
         "recording_bytes_per_minute": 33554432,
@@ -299,6 +304,9 @@ def load(path=None):
         raise ValueError("google.operator_recovery_seconds must be between 0 and 600 seconds")
     if config["browser"]["google_mode"] not in ("cdp", "playwright"):
         raise ValueError("browser.google_mode must be cdp or playwright")
+    port = config["browser"]["jitsi_debug_port"]
+    if type(port) is not int or not 1 <= port <= 65535:
+        raise ValueError("browser.jitsi_debug_port must be between 1 and 65535")
     executable = config["browser"]["google_executable"]
     if executable and (not executable.startswith("/") or any(ord(c) < 32 for c in executable)):
         raise ValueError("browser.google_executable must be an absolute guest path")

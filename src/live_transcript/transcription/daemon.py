@@ -768,6 +768,8 @@ def worker(conn):
                 )
                 ages = [time.time() - s["last_chunk"] for s in selected if s.get("last_chunk")]
                 payload = dict(GPU)
+                if os.environ.get("CAPTION_OWNER_TOKEN"):
+                    payload["server_nonce"] = os.environ["CAPTION_OWNER_TOKEN"]
                 payload["chunk_age"] = round(min(ages), 1) if ages else -1
                 payload["n_sessions"] = len(STATE)
                 payload["stt_err"] = GPU.get("stt_err", "")
@@ -777,6 +779,8 @@ def worker(conn):
                         decode_ms=active.get("decode_ms", 0),
                         audio_quality=active.get("audio_quality", {}),
                         decode_error=active.get("decode_error", ""),
+                        decode_busy=bool(active.get("busy")),
+                        finalize_pending=bool(active.get("utterance_pcm")),
                         revision=active.get("revision", 0),
                         duplicates=active.get("duplicates", 0),
                         last_speech_age=round(

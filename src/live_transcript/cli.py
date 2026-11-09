@@ -445,6 +445,40 @@ def main(argv=None):
     serve.add_argument("arguments", nargs=argparse.REMAINDER)
     bundle = commands.add_parser("bundle", help="build the self-contained browser-guest program")
     bundle.add_argument("output")
+    lab = commands.add_parser("lab", help="isolated Jitsi tests and accuracy regression reports")
+    actions = lab.add_subparsers(dest="lab_action", required=True)
+    jitsi_lab = actions.add_parser("jitsi", help="borrow an idle VM for an owned test room")
+    jitsi_lab.add_argument(
+        "--server", required=True, help="allowlisted self-owned HTTPS Jitsi origin"
+    )
+    jitsi_lab.add_argument("--output", required=True, help="new private results directory")
+    jitsi_lab.add_argument(
+        "--scenario", choices=("clean", "quiet", "noise", "overlap", "all"), default="clean"
+    )
+    jitsi_lab.add_argument("--endpoint", help="optional live inference endpoint override")
+    jitsi_lab.add_argument(
+        "--asr-mode",
+        choices=("existing", "gpu", "cpu"),
+        default="existing",
+        help="reuse endpoints or run an owned full-model inference server",
+    )
+    jitsi_lab.add_argument("--plan", help="optional reference JSON and local PCM WAV phrases")
+    jitsi_lab.add_argument("--baseline", help="previous report.json using the same reference")
+    jitsi_lab.add_argument(
+        "--silence-finalize", type=float, help="lab-only silence boundary in seconds (0.5–10)"
+    )
+    jitsi_lab.add_argument(
+        "--no-final", action="store_true", help="skip independent full-model final recognition"
+    )
+    collect_lab = actions.add_parser(
+        "collect", help="retrieve an existing run without joining again"
+    )
+    collect_lab.add_argument("directory", help="scenario directory containing receipt.json")
+    score_lab = actions.add_parser("report", help="score retained reference and transcript JSON")
+    score_lab.add_argument("--reference", required=True)
+    score_lab.add_argument("--transcript", required=True)
+    score_lab.add_argument("--output", required=True)
+    score_lab.add_argument("--baseline")
     args = parser.parse_args(argv)
     if args.command == "setup":
         from live_transcript.runtime.installation import run as install
@@ -466,7 +500,13 @@ def main(argv=None):
         runtime_config.CONFIG = runtime_config.load()
         from live_transcript.core.config import get, ssh_options
 
-        if args.command == "stack":
+        if args.command == "lab":
+            from live_transcript.runtime.lab import run
+
+            report = run(args)
+            emit(report, args.json)
+            return 0 if report.get("ok", report.get("comparison", {}).get("ok", True)) else 1
+        elif args.command == "stack":
             from live_transcript.runtime.stack import run
 
             emit(run(args), args.json)

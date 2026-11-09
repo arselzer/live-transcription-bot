@@ -188,3 +188,10 @@ include tests/test_stack.py
 include tests/test_workspace.py
 include tests/test_audio_recovery.py
 include tools/smoke_audio_server.py
+
+include src/live_transcript/runtime/lab.py
+include src/live_transcript/runtime/lab_guest.py
+include src/live_transcript/transcription/evaluation.py
+include tests/test_lab.py
+include tests/test_evaluation.py
+include docs/transcription-lab.md
