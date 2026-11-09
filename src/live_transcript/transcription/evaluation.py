@@ -225,7 +225,7 @@ def score(reference, transcript, *, caption_events=(), timing_tolerance=2.0):
             p95=percentile(latency, 0.95),
         ),
         limitations=[
-            "Synthetic speech; not a human-meeting accuracy claim.",
+            "Reference sample only; scores do not establish general human-meeting accuracy.",
             "Phrase coverage, speaker windows and first-caption matching are timing heuristics.",
             "Overlap uses unordered token recall/precision; no ordered WER is reported.",
             "Unmatched words are not automatically hallucinations; retained audio needs review.",

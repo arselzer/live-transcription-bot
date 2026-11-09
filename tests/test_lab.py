@@ -320,7 +320,9 @@ class LabTests(unittest.TestCase):
         from unittest.mock import Mock
 
         profile = self.root / "config.toml"
-        profile.write_text('[asr]\nprimary_device="gpu"\n')
+        profile.write_text(
+            "[paths]\nstate=" + json.dumps(str(self.root)) + '\n[asr]\nprimary_device="gpu"\n'
+        )
         log = self.root / "engine.log"
         log.write_text("whisper_backend_init_gpu: found GPU device 0\n")
         process = Mock(pid=1234)
@@ -331,6 +333,9 @@ class LabTests(unittest.TestCase):
         with (
             patch.object(lab.subprocess, "Popen", return_value=process),
             patch.object(lab, "owns_listener", return_value=True),
+            patch(
+                "live_transcript.transcription.service.owned_engine", return_value=dict(pid=1235)
+            ),
             patch.object(lab.urllib.request, "urlopen", return_value=response),
             patch.object(lab_guest, "stop_process") as stop,
         ):

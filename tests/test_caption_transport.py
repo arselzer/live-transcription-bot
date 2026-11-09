@@ -5,7 +5,74 @@ import unittest
 from unittest.mock import patch
 
 import live_transcript.transcription.transport as stream
+from live_transcript.transcription.speakers import JSONLinesTail, LiveTimeline
 from test_caption_pipeline import wav_bytes
+
+
+class TimelineTests(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.speaker, self.voice = self.root / "speakers.jsonl", self.root / "voice.jsonl"
+
+    def row(self, at, name):
+        return json.dumps(dict(t=at, who=[dict(name=name, role="active")])) + "\n"
+
+    def test_partial_rows_wait_and_completed_rows_are_not_reparsed(self):
+        reader = JSONLinesTail()
+        self.speaker.write_text('{"t":1')
+        self.assertEqual(reader.read(self.speaker), (True, []))
+        with self.speaker.open("a") as f:
+            f.write('}\nnot json\n{"t":2}\n')
+        self.assertEqual(reader.read(self.speaker), (False, [dict(t=1), dict(t=2)]))
+        with patch(
+            "live_transcript.transcription.speakers.json.loads",
+            side_effect=AssertionError("reparsed"),
+        ):
+            self.assertEqual(reader.read(self.speaker), (False, []))
+
+    def test_rotation_truncation_and_rewrite_reset_cached_names(self):
+        reader = LiveTimeline()
+        self.speaker.write_text(self.row(0, "Speaker A") + self.row(1, "Speaker A"))
+        self.assertEqual(reader.read(self.speaker, self.voice), [(0, "Speaker A")])
+        self.assertEqual(reader.observed_until, 1)
+        self.speaker.write_text(self.row(0, "Speaker B"))
+        self.assertEqual(reader.read(self.speaker, self.voice), [(0, "Speaker B")])
+        replacement = self.root / "replacement"
+        replacement.write_text(self.row(2, "Speaker C"))
+        replacement.replace(self.speaker)
+        self.assertEqual(reader.read(self.speaker, self.voice), [(2, "Speaker C")])
+        self.speaker.write_text(self.row(2, "Speaker D") + self.row(3, "Speaker D"))
+        self.assertEqual(reader.read(self.speaker, self.voice), [(2, "Speaker D")])
+        self.speaker.unlink()
+        self.assertEqual(reader.read(self.speaker, self.voice), [])
+
+    def test_voice_changes_and_ambiguous_speakers_preserve_uncertainty(self):
+        reader = LiveTimeline()
+        self.speaker.write_text(self.row(0, "Speaker A") + self.row(4, "Speaker B"))
+        self.assertEqual(
+            reader.read(self.speaker, self.voice), [(0, "Speaker A"), (4, "Speaker B")]
+        )
+        self.voice.write_text(json.dumps(dict(t=1, duration=1, speaker_label="Test voice")) + "\n")
+        self.assertEqual(
+            reader.read(self.speaker, self.voice),
+            [(0, "Speaker A"), (1, "Test voice"), (2, ""), (4, "Speaker B")],
+        )
+        with self.speaker.open("a") as f:
+            f.write(
+                json.dumps(
+                    dict(
+                        t=5,
+                        who=[
+                            dict(name="Speaker A", role="active"),
+                            dict(name="Speaker B", role="active"),
+                        ],
+                    )
+                )
+                + "\n"
+            )
+        self.assertEqual(reader.read(self.speaker, self.voice)[-1], (5, ""))
 
 
 class UploadTests(unittest.TestCase):

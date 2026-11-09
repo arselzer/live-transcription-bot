@@ -577,8 +577,8 @@ class WorkspaceHandler(HubHandler):
 
                     validate_invitation(data.get("url"))
                     minutes = data.get("minutes", 180)
-                    if type(minutes) is not int or not 1 <= minutes <= 1440:
-                        raise ValueError("Meeting duration must be 1–1440 minutes")
+                    if type(minutes) is not int or not 1 <= minutes <= 480:
+                        raise ValueError("Meeting duration must be 1–480 minutes")
                     if self.server.manager.unreachable:
                         raise RuntimeError("VM status is unavailable; inspect it before joining")
                     if self.server.manager.target is not None or current_run().get("status") in (

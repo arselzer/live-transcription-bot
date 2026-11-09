@@ -112,6 +112,7 @@ DEFAULTS = {
         "silence_rms": 40.0,
         "run_every": 1.5,
         "silence_finalize": 3.5,
+        "mixed_language_gap": 1.0,
         "commit_once": True,
     },
     "asr": {
@@ -319,6 +320,8 @@ def load(path=None):
     for key in ("run_every", "silence_finalize", "silence_rms"):
         if not 0 < config["caption"][key] <= 32768:
             raise ValueError("invalid caption." + key)
+    if not 0.1 <= config["caption"]["mixed_language_gap"] <= 5:
+        raise ValueError("caption.mixed_language_gap must be between 0.1 and 5 seconds")
     for key in ("check_seconds", "cooldown_seconds", "missing_seconds", "max_actions_5min"):
         if not 0 < config["recovery"][key] <= 3600:
             raise ValueError("invalid recovery." + key)

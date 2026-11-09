@@ -78,6 +78,13 @@ def validate_status(value):
                 number(part, "queued_audio_s")
             if type(part.get("decode_error", False)) is not bool:
                 raise ValueError("Speech status is unavailable")
+            if part.get("backend_state", "unknown") not in (
+                "unknown",
+                "ready",
+                "degraded",
+                "unavailable",
+            ):
+                raise ValueError("Speech backend status is unavailable")
             flags = part.get("signal_flags", [])
             if (
                 not isinstance(flags, list)
@@ -420,7 +427,7 @@ class OperatorServer(ThreadingHTTPServer):
                     "admission_" + stage,
                     {
                         "joining": "Joining the meeting",
-                        "needs_operator": "Google admission needs manual control in the console",
+                        "needs_operator": "Meeting admission needs manual control in the console",
                         "admitted": "Meeting admission confirmed",
                         "rejected": "Meeting admission was not confirmed",
                     }[stage],
@@ -429,7 +436,10 @@ class OperatorServer(ThreadingHTTPServer):
                 self.last_admission_state = admission_state
             speech = value.get("speech")
             if speech is not None:
-                failed = bool(speech.get("decode_error"))
+                failed = bool(speech.get("decode_error")) or speech.get("backend_state") in (
+                    "degraded",
+                    "unavailable",
+                )
                 if failed != self.last_speech_error:
                     self.events.add(
                         "speech_degraded" if failed else "speech_recovered",

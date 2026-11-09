@@ -8,9 +8,10 @@ self-hosted instances and test limitations.
 
 ![Live transcript workspace demonstration](docs/assets/workspace-demo.gif)
 
-Synthetic demo with fictional participants: captions arrive, the reader searches
-the transcript, then switches to the isolated VM console. The workspace shows
-recording health separately from recognition, with optional draft meeting notes.
+Jitsi lab replay with test voices and generic participants: captions arrive,
+search highlights matching words, and the reader switches to the isolated
+meeting browser. Recording health stays separate from recognition, with
+collapsible draft meeting notes.
 See [the walkthrough](docs/workspace.md) for controls and a Hermes example.
 For repeatable Jitsi speech tests and accuracy comparisons, see
 [the transcription lab](docs/transcription-lab.md).

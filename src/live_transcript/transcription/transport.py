@@ -74,35 +74,17 @@ def tcp(msg, timeout=5):
         return sock.makefile("rb").read()
 
 
+from live_transcript.transcription.speakers import LiveTimeline
+
+TIMELINE = LiveTimeline()
+
+
 def read_timeline():
-    ev = []
-    try:
-        source = SCOPED_SPK_LOG if SCOPED_SPK_LOG.exists() else SPK_LOG
-        for line in source.read_text(errors="replace").splitlines():
-            try:
-                row = json.loads(line)
-                name = next((w["name"] for w in row["who"] if w.get("role") == "active"), "")
-                if name and ("recording" in name.lower() or "live transcript" in name.lower()):
-                    name = ""
-                if not ev or ev[-1][1] != name:
-                    ev.append((float(row["t"]), name))
-            except (ValueError, KeyError, TypeError):
-                pass
-    except OSError:
-        pass
-    try:
-        voice = HOME / "rec" / (SESSION + ".voice.jsonl")
-        if not voice.exists():
-            voice = HOME / "rec/voice.jsonl"
-        for line in voice.read_text().splitlines():
-            event = json.loads(line)
-            start, end = float(event["t"]), float(event["t"]) + float(event["duration"])
-            ev = [(t, name) for t, name in ev if not start <= t < end]
-            ev.extend([(start, event.get("speaker_label", event["name"])), (end, "")])
-        ev.sort()
-    except (OSError, ValueError, KeyError):
-        pass
-    return ev
+    speaker = SCOPED_SPK_LOG if SCOPED_SPK_LOG.exists() else SPK_LOG
+    voice = HOME / "rec" / (SESSION + ".voice.jsonl")
+    if not voice.exists():
+        voice = HOME / "rec/voice.jsonl"
+    return TIMELINE.read(speaker, voice)
 
 
 def speaker_tracker():
@@ -110,11 +92,13 @@ def speaker_tracker():
         try:
             ev = read_timeline()
             elapsed = time.time() - SESSION_START
-            now = ev[-1][1] if ev and elapsed - ev[-1][0] < 5 else ""
+            now = next((name for at, name in reversed(ev) if at <= elapsed), "")
+            if elapsed - TIMELINE.observed_until >= 5:
+                now = ""
             atomic_write(HOME / "nowspeaking.txt", now)
             totals = {}
             for i, (t, name) in enumerate(ev):
-                end = ev[i + 1][0] if i + 1 < len(ev) else min(elapsed, t + 5)
+                end = ev[i + 1][0] if i + 1 < len(ev) else min(elapsed, TIMELINE.observed_until + 5)
                 if name:
                     totals[name] = totals.get(name, 0) + max(0, end - t)
             atomic_write(HOME / "talktime.json", json.dumps(totals))

@@ -31,6 +31,11 @@ meeting links, identities, paths, or messaging credentials.
   progress and its fresh heartbeat. Report degraded capture explicitly.
 - ASR, caption camera, speaker labels, summaries, and backups have separate
   health. Their failure alone must not terminate healthy original capture.
+- Read `speech_backends` and `transcription_degraded` from check. A responding
+  external endpoint does not verify its model/device; managed engines include
+  process, listener and startup checks. Preserve active resource holds and
+  coordinate with their owner before restoring services. Report quiet audio or
+  uncertain speaker labels without claiming that words were captured correctly.
 - Google can archive join evidence before admission. Describe this as join
   evidence, not a captured meeting. Unsigned Google admission is experimental.
 - A host denial, locked room, or challenge needs operator attention. Do not

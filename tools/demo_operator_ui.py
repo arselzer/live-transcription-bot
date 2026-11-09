@@ -1,4 +1,4 @@
-"""Render the real workspace against synthetic data; never connect to a VM.
+"""Render the real workspace against synthetic or recorded lab data; never connect to a VM.
 
 Run with a development Playwright installation and Chromium. The fixture owns
 only loopback HTTP servers and a temporary journal. Screenshots/GIF contain no
@@ -6,6 +6,7 @@ real meetings, identities, clipboard data, capability URL, or browser profile.
 """
 
 import argparse
+import base64
 from copy import deepcopy
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import io
@@ -38,8 +39,25 @@ LINES = [
 
 
 class FixtureBrowser(BaseHTTPRequestHandler):
+    jitsi_image = None
+
     def do_GET(self):
-        body = b"""<!doctype html><html class="noVNC_connected"><meta charset="utf-8">
+        if self.path.split("?", 1)[0] == "/jitsi-frame.png" and self.jitsi_image:
+            body = self.jitsi_image
+            self.send_response(200)
+            self.send_header("Content-Type", "image/png")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+        if self.jitsi_image:
+            body = b"""<!doctype html><html class="noVNC_connected"><meta charset="utf-8">
+<style>html,body{margin:0;width:100%;height:100%;background:#111;overflow:hidden}img{width:100%;height:100%;object-fit:contain}small{position:absolute;bottom:8px;left:10px;background:#151a21d9;color:white;padding:5px 8px;border-radius:4px;font:11px system-ui}</style>
+<img src="data:image/png;base64,IMAGE_DATA" alt="Recorded Jitsi lab meeting with generic participants"><small>Jitsi lab recording</small></html>""".replace(
+                b"IMAGE_DATA", base64.b64encode(self.jitsi_image)
+            )
+        else:
+            body = b"""<!doctype html><html class="noVNC_connected"><meta charset="utf-8">
 <style>body{margin:0;background:#141923;color:#e2e7ee;font:16px system-ui;height:100vh;display:grid;place-content:center;text-align:center}p{color:#9faec3;max-width:460px;line-height:1.8}.room{border:1px solid #46536b;border-radius:12px;padding:48px}small{color:#a0b99f}</style>
 <div class="room"><small>SYNTHETIC DEMONSTRATION</small><h1>Isolated meeting browser</h1>
 <p>This is where the VM desktop appears. Finish joining here when a meeting needs manual admission.</p><p>No live meeting or browser is connected.</p></div></html>"""
@@ -54,10 +72,35 @@ class FixtureBrowser(BaseHTTPRequestHandler):
 
 
 def main():
+    global LINES
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--chromium", help="optional Chromium executable path")
+    parser.add_argument(
+        "--jitsi-image", type=Path, help="reviewed page-only PNG from a test Jitsi room"
+    )
+    parser.add_argument(
+        "--transcript", type=Path, help="reviewed lab transcript JSON with generic speakers"
+    )
     args = parser.parse_args()
+    if bool(args.jitsi_image) != bool(args.transcript):
+        parser.error("--jitsi-image and --transcript must be supplied together")
+    if args.jitsi_image:
+        import json
+
+        rows = json.loads(args.transcript.read_text())
+        allowed = {"Facilitator", "Participant", "Participant 1", "Participant 2", "Lab Recorder"}
+        allowed.update({"Participant / Facilitator", "Facilitator / Participant"})
+        if not isinstance(rows, list) or len(rows) > 100:
+            parser.error("Use a bounded lab transcript")
+        LINES = [
+            (row["t"], row["speaker"], row["text"]) for row in rows if row.get("text", "").strip()
+        ]
+        if len(LINES) < 6 or any(speaker not in allowed for _, speaker, _ in LINES):
+            parser.error("Use at least six lab passages with generic participant labels")
+        if not any("deadline" in text.lower() for _, _, text in LINES):
+            parser.error("The walkthrough requires its scripted deadline passage")
+        FixtureBrowser.jitsi_image = args.jitsi_image.read_bytes()
     args.output.mkdir(parents=True, exist_ok=True)
     from PIL import Image
     from playwright.sync_api import sync_playwright, expect
@@ -76,6 +119,9 @@ def main():
 
             class Bridge:
                 recovery = False
+                speech_state = dict(
+                    age=0.1, queued_audio_s=0.8, decode_error=False, signal_flags=[]
+                )
 
                 def call(self, request):
                     if request["op"] != "status":
@@ -83,7 +129,9 @@ def main():
                     return dict(
                         display=":88",
                         control=True,
-                        session=dict(id="synthetic-demo", provider="proton"),
+                        session=dict(
+                            id="synthetic-demo", provider="jitsi" if args.jitsi_image else "proton"
+                        ),
                         admission=dict(
                             stage="needs_operator" if self.recovery else "admitted",
                             utc=100 if self.recovery else 1,
@@ -98,9 +146,7 @@ def main():
                                 for k in ("audio", "screen", "snapshots")
                             },
                         ),
-                        speech=dict(
-                            age=0.1, queued_audio_s=0.8, decode_error=False, signal_flags=[]
-                        ),
+                        speech=dict(self.speech_state),
                     )
 
             bridge = Bridge()
@@ -144,42 +190,98 @@ def main():
                 page.goto(f"http://{server.authority}/#token={server.token}")
                 expect(page.get_by_text(LINES[1][2], exact=True)).to_be_visible()
                 frames = []
+                page.evaluate("""() => {
+                    const cursor=document.createElement('div'); cursor.id='demo-cursor';
+                    cursor.style.cssText='position:fixed;left:1150px;top:270px;width:13px;height:19px;background:#233146;clip-path:polygon(0 0,100% 66%,58% 66%,78% 100%,59% 100%,39% 69%,0 90%);z-index:9999;pointer-events:none;filter:drop-shadow(0 1px 1px white);transition:left .18s,top .18s';
+                    document.body.append(cursor);
+                }""")
 
-                def frame():
-                    page.wait_for_timeout(180)
-                    frames.append(Image.open(io.BytesIO(page.screenshot())).convert("RGB"))
+                def frame(seconds=1.4):
+                    for _ in range(max(1, round(seconds * 6))):
+                        page.wait_for_timeout(140)
+                        frames.append(Image.open(io.BytesIO(page.screenshot())).convert("RGB"))
+
+                def point(locator):
+                    box = locator.bounding_box()
+                    page.evaluate(
+                        """p => {const c=document.querySelector('#demo-cursor');c.style.left=p.x+'px';c.style.top=p.y+'px'}""",
+                        dict(x=box["x"] + box["width"] / 2, y=box["y"] + box["height"] / 2),
+                    )
+                    frame(0.35)
 
                 frame()
                 checkpoint(LINES[:4])
                 expect(page.get_by_text(LINES[3][2], exact=True)).to_be_visible(timeout=15000)
                 frame()
                 checkpoint(LINES, True)
-                expect(page.get_by_text(LINES[5][2], exact=True)).to_be_visible(timeout=15000)
+                expect(page.get_by_text(LINES[-1][2], exact=True)).to_be_visible(timeout=15000)
                 expect(page.get_by_text("AI draft · verify against transcript")).to_be_visible()
-                frame()
+                frame(2)
+                page.screenshot(path=str(args.output / "workspace.png"))
                 search = page.get_by_role("searchbox", name="Search transcript")
-                search.fill("deadline")
-                expect(page.locator(".transcript-line")).to_have_count(1)
-                frame()
-                page.get_by_role("button", name="Follow live ↓", exact=True).click()
-                expect(page.locator(".transcript-line")).to_have_count(6)
+                point(search)
+                for n in range(1, len("deadline") + 1):
+                    search.fill("deadline"[:n])
+                    frame(0.15)
+                expect(page.locator("mark").first).to_be_visible()
+                frame(1.6)
+                resume = page.get_by_role("button", name="Follow live ↓", exact=True)
+                point(resume)
+                resume.click()
+                expect(page.locator(".transcript-line")).to_have_count(len(LINES))
                 with page.expect_download() as download:
                     page.get_by_role("button", name="Save text", exact=True).click()
                 assert download.value.suggested_filename == "live-transcript.txt"
                 assert "deadline" in Path(download.value.path()).read_text()
                 iframe = page.locator("iframe").element_handle()
-                page.get_by_role("button", name="VM console", exact=True).click()
+                console = page.get_by_role("button", name="VM console", exact=True)
+                point(console)
+                console.click()
                 expect(page.locator(".viewer-frame")).to_be_visible()
-                frame()
-                page.get_by_role("button", name="Transcript", exact=True).click()
+                if args.jitsi_image:
+                    page.frame_locator("iframe").locator("img").evaluate(
+                        "img => {if(!img.complete || !img.naturalWidth) throw new Error('Recorded Jitsi image did not load')}"
+                    )
+                frame(2.5)
+                transcript = page.get_by_role("button", name="Transcript", exact=True)
+                point(transcript)
+                transcript.click()
                 assert iframe.evaluate("el => el.isConnected"), "tab changes must keep VNC mounted"
                 frame()
-                frames[2].save(args.output / "workspace.png")
-                frames[0].save(
+                palette_source = Image.new("RGB", (256, 192 * len(frames[::12])))
+                for n, sample in enumerate(frames[::12]):
+                    palette_source.paste(sample.resize((256, 192)), (0, n * 192))
+                palette = palette_source.quantize(colors=240)
+                # Preserve small UI accents even when large meeting tiles dominate
+                # the color histogram; search highlights must remain distinguishable.
+                colors = palette.getpalette()
+                accents = [
+                    "fff0b8",
+                    "285da8",
+                    "f5f6f8",
+                    "dfe4ea",
+                    "293649",
+                    "bd4c58",
+                    "fff5f5",
+                    "287157",
+                    "8c5d1c",
+                    "2b5aa4",
+                    "277157",
+                    "7a5094",
+                    "92601d",
+                    "28717d",
+                    "f3faf6",
+                    "ffffff",
+                ]
+                for n, color in enumerate(accents):
+                    colors[(240 + n) * 3 : (241 + n) * 3] = bytes.fromhex(color)
+                palette.putpalette(colors)
+                encoded = [f.quantize(palette=palette, dither=Image.Dither.NONE) for f in frames]
+                encoded[0].save(
                     args.output / "workspace-demo.gif",
                     save_all=True,
-                    append_images=frames[1:],
-                    duration=[1800, 1800, 2600, 1600, 2200, 2000],
+                    append_images=encoded[1:],
+                    duration=170,
                     loop=0,
                     optimize=True,
                 )
@@ -200,6 +302,40 @@ def main():
                     "el => {el.scrollTop=0;el.dispatchEvent(new Event('scroll'));}"
                 )
                 expect(page.get_by_role("button", name="Follow live ↓", exact=True)).to_be_visible()
+                checkpoint(
+                    [
+                        (
+                            n * 5,
+                            "Participant 1",
+                            f"Synthetic passage {n}: recording remains independent.",
+                        )
+                        for n in range(51)
+                    ]
+                )
+                expect(
+                    page.get_by_role("button", name="Follow live ↓", exact=True)
+                ).to_contain_text("1 new", timeout=15000)
+                assert page.locator(".transcript-scroll").evaluate("el=>el.scrollTop") < 100
+                checkpoint(
+                    [
+                        (
+                            n * 5,
+                            "Participant 1",
+                            f"Synthetic passage {n}: recording remains independent.",
+                        )
+                        for n in range(50)
+                    ]
+                )
+                bridge.speech_state.update(signal_flags=["quiet_or_silence"])
+                server.cached_status = None
+                expect(page.get_by_text("Low audio level", exact=True)).to_be_visible(timeout=15000)
+                bridge.speech_state.update(backend_state="unavailable")
+                server.cached_status = None
+                expect(page.get_by_text("Recognition unavailable", exact=True)).to_be_visible(
+                    timeout=15000
+                )
+                expect(page.locator(".badge.recording")).to_contain_text("Recording")
+                bridge.speech_state.update(backend_state="ready", signal_flags=[])
                 bridge.recovery = True
                 server.cached_status = None
                 expect(page.get_by_role("button", name="Open console", exact=True)).to_be_visible(

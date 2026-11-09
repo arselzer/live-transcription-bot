@@ -7,12 +7,12 @@
     "Segoe UI",
     sans-serif;
   color: #253143;
-  background: #f4f6f8;
+  background: #f5f6f8;
   font-synthesis: none;
   font-size: 14px;
   color-scheme: light;
   --muted: #657386;
-  --border: #dce2e9;
+  --border: #dfe4ea;
   --blue: #285da8;
 }
 * {
@@ -54,6 +54,9 @@ button:hover:enabled {
   background: #f0f4fa;
   border-color: #a8bad3;
 }
+button:active:enabled {
+  background: #e8eef7;
+}
 button:disabled {
   opacity: 0.45;
   cursor: default;
@@ -63,12 +66,12 @@ a {
   text-decoration: none;
 }
 .shell {
-  max-width: 1720px;
+  max-width: 1520px;
   margin: auto;
   padding: 0 32px;
 }
 .topbar {
-  min-height: 76px;
+  min-height: 70px;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -151,8 +154,8 @@ a {
 main {
   display: grid;
   grid-template-columns: minmax(0, 1fr) 320px;
-  gap: 28px;
-  padding: 28px 0;
+  gap: 24px;
+  padding: 24px 0;
 }
 .workspace {
   min-width: 0;
@@ -220,8 +223,8 @@ h2 {
 .transcript-panel {
   background: #fff;
   border: 1px solid var(--border);
-  border-radius: 9px;
-  box-shadow: 0 2px 5px #25314303;
+  border-radius: 10px;
+  box-shadow: 0 2px 8px #25314304;
 }
 .panel {
   padding: 20px;
@@ -525,16 +528,32 @@ h2 {
   background: #fcfdfe;
 }
 .search-field {
+  position: relative;
   flex: 1;
   min-width: 80px;
 }
 .search-field input {
   width: 100%;
-  padding: 10px 12px;
+  padding: 10px 36px 10px 12px;
   background: #fff;
   border: 1px solid #d1dae6;
   border-radius: 6px;
   color: #253143;
+}
+.search-field input::-webkit-search-cancel-button {
+  display: none;
+}
+.clear-search {
+  position: absolute;
+  right: 4px;
+  top: 3px;
+  min-height: 30px;
+  padding: 2px 8px;
+  font-size: 20px;
+  line-height: 1;
+  border-color: transparent;
+  background: transparent;
+  color: var(--muted);
 }
 .search-field input::placeholder {
   color: #6b7a90;
@@ -564,7 +583,7 @@ h2 {
   flex-wrap: wrap;
 }
 .transcript-scroll {
-  height: min(58vh, 650px);
+  height: clamp(340px, calc(100vh - 340px), 680px);
   min-height: 300px;
   overflow-y: auto;
   overflow-anchor: none;
@@ -572,10 +591,10 @@ h2 {
   scrollbar-gutter: stable;
 }
 .has-notes .transcript-scroll {
-  height: clamp(300px, calc(100vh - 575px), 650px);
+  height: clamp(300px, calc(100vh - 575px), 580px);
 }
 .transcript-line {
-  padding: 18px 0;
+  padding: 20px 0;
   border-bottom: 1px solid #e9edf2;
 }
 .line-label {
@@ -594,10 +613,16 @@ h2 {
 }
 .transcript-line p {
   margin: 9px 0 0;
-  line-height: 1.8;
-  color: #344154;
+  line-height: 1.75;
+  color: #293649;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+.transcript-line mark {
+  color: inherit;
+  background: #fff0b8;
+  border-radius: 2px;
+  box-shadow: 0 0 0 2px #fff0b8;
 }
 .speaker-0 {
   color: #2b5aa4;
@@ -648,7 +673,26 @@ h2 {
 }
 .meeting-notes {
   border-top: 1px solid #e5e9ef;
-  padding: 21px 25px;
+  padding: 18px 24px;
+  background: #fafbfc;
+}
+.meeting-notes summary {
+  cursor: pointer;
+  list-style: none;
+}
+.meeting-notes summary::-webkit-details-marker {
+  display: none;
+}
+.meeting-notes summary::after {
+  content: "+";
+  color: var(--muted);
+  font-size: 18px;
+}
+.meeting-notes[open] summary::after {
+  content: "−";
+}
+.meeting-notes summary h2 {
+  margin-right: auto;
 }
 .meeting-notes .panel-title span {
   font-size: 11px;

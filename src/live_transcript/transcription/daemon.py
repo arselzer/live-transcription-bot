@@ -115,6 +115,17 @@ def gpu_poller():
         time.sleep(5)
 
 
+def backend_poller():
+    from live_transcript.transcription.service import readiness
+
+    while True:
+        results = readiness()
+        with LOCK:
+            GPU["backends"] = results
+            GPU["backends_checked_at"] = time.time()
+        time.sleep(10)
+
+
 BAD_LANGS = re.compile(r"[\u0400-\u04FF\u0370-\u03FF\u4E00-\u9FFF\u3040-\u30FF\u0590-\u05FF]")
 HALLUC = re.compile(
     r"(subtitles by|music by|copyright|\[music\]|\[applause\]|amara\.org|\[silence\])", re.I
@@ -151,7 +162,7 @@ def lang_hits(text):
 from live_transcript.transcription.router import ASRRouter
 
 ASR_ROUTER = ASRRouter()
-DECODE_TIMEOUT = max(30, 4 * get("asr", "cpu_timeout") + 2 * get("asr", "gpu_timeout") + 15)
+DECODE_TIMEOUT = max(30, 8 * get("asr", "cpu_timeout") + 4 * get("asr", "gpu_timeout") + 15)
 
 
 def transcribe(pcm: bytes, lang: str = "", prompt: str = ""):
@@ -196,6 +207,24 @@ def stt_server(path, lang="", prompt="", endpoint=None, timeout=12):
     """Return filtered segments and metadata; propagate backend failures."""
     import urllib.request
     import urllib.error
+    from pathlib import Path
+
+    # A known managed engine must match its current profile before it receives
+    # speech. External servers remain supported, with explicitly unverified
+    # provenance in readiness rather than inferred hardware claims.
+    device = (
+        "gpu"
+        if endpoint is None
+        else "cpu-small"
+        if endpoint == get("asr", "small_cpu_url")
+        else "cpu-large"
+    )
+    if (Path(get("paths", "state")) / f"asr-{device}.json").exists():
+        from live_transcript.transcription.service import probe
+
+        status = probe(endpoint or STT_URL, device, timeout=min(3, timeout))
+        if not status["ready"]:
+            raise RuntimeError(status["detail"])
 
     boundary = "----capt" + str(int(time.time() * 1000))
     with open(path, "rb") as fh:
@@ -253,7 +282,6 @@ def stt_server(path, lang="", prompt="", endpoint=None, timeout=12):
         d = post(False, remaining)
         metadata_fallback = True
     if os.environ.get("CAPTION_DIAGNOSTIC_DIR"):
-        from pathlib import Path
         import shutil
 
         root = Path(os.environ["CAPTION_DIAGNOSTIC_DIR"])
@@ -862,6 +890,7 @@ def serve(database):
     if get("model", "enabled"):
         start_board(sys.modules[__name__], RUNTIME)
     threading.Thread(target=gpu_poller, daemon=True).start()
+    threading.Thread(target=backend_poller, daemon=True).start()
     if get("model", "enabled"):
         threading.Thread(target=ticker, daemon=True).start()
     srv = socket.socket()

@@ -14,6 +14,43 @@ def language_choice(probabilities, current):
     return choice if best >= 0.30 and best >= other * 1.6 and best - other >= 0.15 else current
 
 
+def text_languages(app, lines):
+    languages = set()
+    for _, _, text in lines:
+        de, en = app.lang_hits(text)
+        if max(de, en) >= 2 and max(de, en) >= min(de, en) * 2:
+            languages.add("de" if de > en else "en")
+    return languages
+
+
+def recognition_context():
+    from live_transcript.transcription.batch import glossary_text
+
+    # UI display names and provisional captions are not evidence of words spoken.
+    # Priming from them can make Whisper repeat labels instead of recognizing audio.
+    return glossary_text()
+
+
+def speech_spans(pcm, rms, threshold, gap):
+    """Partition at observed silence, keeping every sample and at most four spans."""
+    frame = 640  # 20 ms of PCM16 at 16 kHz
+    quiet = None
+    cuts = []
+    voiced = False
+    for offset in range(0, len(pcm), frame):
+        if rms(pcm[offset : offset + frame]) < threshold:
+            if quiet is None:
+                quiet = offset
+        else:
+            if voiced and quiet is not None and offset - quiet >= gap * 32000:
+                cuts.append((offset - quiet, ((offset + quiet) // 4) * 2))
+            quiet = None
+            voiced = True
+    # Prefer the clearest boundaries if the utterance contains many hesitations.
+    points = [0, *sorted(at for _, at in sorted(cuts, reverse=True)[:3]), len(pcm)]
+    return list(zip(points, points[1:]))
+
+
 class CaptionRuntime:
     def __init__(self, app, store):
         self.app, self.store = app, store
@@ -244,15 +281,8 @@ class CaptionRuntime:
             with app.LOCK:
                 timeline = list(st["timeline"])
                 pick = st.get("pick", "de")
-                names = " ".join(sorted({n for _, n in timeline[-6:] if n}))[:80]
-                cand = st.get("cand")
                 input_voice_at = st.get("last_voice_at", 0)
-                tail = st["lines"][-1][2] if cand and st["lines"] else ""
-                prompt = (
-                    (names + " " + " ".join(tail.split()[-6:])).strip()[:120]
-                    if app.COMMIT_ONCE
-                    else names
-                )
+                prompt = recognition_context()
             segs = [] if silent else app.transcribe(snap, pick, prompt)
             if segs is None:
                 raise RuntimeError("speech backend unavailable; audio retained for retry")
@@ -263,9 +293,7 @@ class CaptionRuntime:
             if not silent and (acoustic_pick != pick or lexical_switch):
                 other = acoustic_pick if acoustic_pick != pick else ("en" if pick == "de" else "de")
                 # A previous-language transcript seed can prime an unwanted translation.
-                alternative = app.transcribe(
-                    snap, other, names if acoustic_pick != pick else prompt
-                )
+                alternative = app.transcribe(snap, other, prompt)
                 if alternative is not None:
                     txt2 = " ".join(text for _, text in alternative)
                     d2, e2 = app.lang_hits(txt2)
@@ -288,6 +316,10 @@ class CaptionRuntime:
                 if self.app.STATE.get(session) is not st or st.get("generation") != token:
                     return  # reset, timeout, or newer decoder owns the session
                 st["pick"] = pick
+                if segs:
+                    history = st.setdefault("language_history", [])
+                    history.append((t0, t0 + len(snap) / 32000, pick))
+                    st["language_history"] = history[-64:]
                 self.record_backend(st, asr_result, t0)
                 if not silent:
                     st["decode_ms"] = round((time.monotonic() - started) * 1000, 1)
@@ -364,15 +396,42 @@ class CaptionRuntime:
             app.ASR_ROUTER.note_backlog(self.queued_seconds(session, st))
         try:
             pick = st.get("pick", "de")
-            names = " ".join(sorted({name for _, name in st["timeline"][-8:] if name}))[:80]
-            segs = app.transcribe(snap, pick, names)
-            if segs is None:
-                raise RuntimeError("final pass unavailable; utterance retained")
-            route = language_choice(getattr(segs, "language_probs", {}), pick)
-            if route != pick:
-                other = app.transcribe(snap, route, names)
-                if other:
-                    segs, pick = other, route
+            prompt = recognition_context()
+            with app.LOCK:
+                prior = list(st["lines"][mark:])
+                languages = text_languages(app, prior)
+                languages.update(
+                    lang
+                    for start, end, lang in st.get("language_history", [])
+                    if end > t0 and start < t0 + len(snap) / 32000
+                )
+            spans = [(0, len(snap))]
+            if len(languages) > 1:
+                from live_transcript.core.config import get
+
+                spans = speech_spans(
+                    snap, app._rms, app.SILENCE_RMS, get("caption", "mixed_language_gap")
+                )
+            segs = app.ASRSegments()
+            for begin, stop in spans:
+                part = app.transcribe(snap[begin:stop], pick, prompt)
+                if part is None:
+                    raise RuntimeError("final pass unavailable; utterance retained")
+                route = language_choice(getattr(part, "language_probs", {}), pick)
+                if route != pick:
+                    other = app.transcribe(snap[begin:stop], route, prompt)
+                    if other is None:
+                        raise RuntimeError("language correction unavailable; utterance retained")
+                    if other:
+                        part, pick = other, route
+                for start, text in part:
+                    relative = begin / 32000 + start
+                    segs.append((relative, text))
+                    segs.segment_ends[(relative, text)] = begin / 32000 + getattr(
+                        part, "segment_ends", {}
+                    ).get((start, text), start)
+                if getattr(part, "backend", None):
+                    segs.backend = part.backend
             with self.changed:
                 if app.STATE.get(session) is not st or st.get("generation") != token:
                     return
@@ -397,7 +456,22 @@ class CaptionRuntime:
                             # Confidence filtering can retain only the last
                             # segment of a full pass. It must not erase a known
                             # leading clause when the result is just its suffix.
-                            if (
+                            loses_language = bool(
+                                text_languages(app, previous) - text_languages(app, final)
+                            )
+                            if loses_language and len(languages) > 1:
+                                events = st.setdefault("reconciliation_events", [])
+                                events.append(
+                                    dict(
+                                        utc=time.time(),
+                                        audio_t0=t0,
+                                        reason="language_coverage",
+                                        candidate=final,
+                                    )
+                                )
+                                st["reconciliation_events"] = events[-32:]
+                                final = previous
+                            elif (
                                 new_words
                                 and len(new_words) * 2 < len(old_words)
                                 and old_words[-len(new_words) :] == new_words
@@ -413,6 +487,9 @@ class CaptionRuntime:
                 st["cand"] = None
                 st.pop("force_finalize", None)
                 st["pick"] = pick
+                st["language_history"] = [
+                    row for row in st.get("language_history", []) if row[1] > t0 + len(snap) / 32000
+                ]
                 remainder = bytes(st.get("utterance_pcm", b""))[len(snap) :]
                 end = t0 + len(snap) / 32000
                 if remainder and app._rms(remainder) >= app.SILENCE_RMS:

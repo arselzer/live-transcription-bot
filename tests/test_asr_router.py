@@ -1,8 +1,121 @@
+import io
+import json
+import os
+import socket
+import sys
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 from live_transcript.transcription.router import ASRRouter
 from live_transcript.transcription.service import command
+from live_transcript.transcription import service
 import live_transcript.core.config as runtime_config
+
+
+class BackendReadinessTests(unittest.TestCase):
+    def test_readiness_follows_the_caption_endpoint_override(self):
+        with patch.dict(os.environ, CAPTION_STT_URL="http://127.0.0.1:19992/inference"):
+            self.assertEqual(service.endpoints()[0][1], "http://127.0.0.1:19992/inference")
+
+    def test_occupied_endpoint_refuses_model_loading(self):
+        with socket.socket() as listener:
+            listener.bind(("127.0.0.1", 0))
+            listener.listen()
+            argv = [
+                "engine",
+                "-m",
+                str(self.model),
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(listener.getsockname()[1]),
+            ]
+            with (
+                patch.object(service, "command", return_value=argv),
+                patch.object(service, "supervise") as load,
+                patch.object(sys, "argv", ["asr", "--device", "gpu"]),
+                patch.dict(os.environ),
+            ):
+                with self.assertRaises(OSError):
+                    service.main()
+            load.assert_not_called()
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.model = self.root / "model.bin"
+        self.model.write_bytes(b"model")
+        self.url = "http://127.0.0.1:19991/inference"
+        original = service.get
+        overrides = {
+            ("paths", "state"): str(self.root),
+            ("paths", "model"): str(self.model),
+            ("caption", "stt_url"): self.url,
+        }
+        self.settings = patch.object(
+            service, "get", side_effect=lambda s, k: overrides.get((s, k), original(s, k))
+        )
+        self.settings.start()
+        self.addCleanup(self.settings.stop)
+        self.argv = command("gpu")
+        self.record = dict(
+            pid=os.getpid(),
+            ticks="123",
+            endpoint=self.url,
+            model=service.identity(self.model),
+            device="gpu",
+        )
+
+    def response(self, status="ok"):
+        result = io.BytesIO(json.dumps(dict(status=status)).encode())
+        result.status = 200
+        return result
+
+    def check(self, record=None, listening=True):
+        (self.root / "asr-gpu.json").write_text(json.dumps(record or self.record))
+        with (
+            patch.object(service.urllib.request, "urlopen", return_value=self.response()),
+            patch.object(service, "process_ticks", return_value="123"),
+            patch.object(service, "owns_listener", return_value=listening),
+            patch.object(
+                Path,
+                "read_bytes",
+                return_value=b"\0".join(os.fsencode(a) for a in self.argv) + b"\0",
+            ),
+        ):
+            return service.probe(self.url, "gpu")
+
+    def test_listener_health_alone_does_not_claim_a_gpu(self):
+        with patch.object(service.urllib.request, "urlopen", return_value=self.response()):
+            result = service.probe(self.url, "gpu")
+        self.assertTrue(result["ready"])
+        self.assertFalse(result["verified"])
+        self.assertEqual(result["device"], "unknown")
+
+    def test_managed_gpu_requires_current_model_process_and_listener(self):
+        self.assertTrue(self.check()["verified"])
+        for field, value in (
+            ("ticks", "stale"),
+            ("device", "cpu"),
+            ("exited", True),
+            ("model", {}),
+        ):
+            with self.subTest(field=field):
+                self.assertFalse(self.check(dict(self.record, **{field: value}))["ready"])
+        self.assertFalse(self.check(listening=False)["ready"])
+        self.model.write_bytes(b"different model")
+        self.assertFalse(self.check()["ready"])
+
+    def test_invalid_health_and_invalid_receipts_never_look_ready(self):
+        with patch.object(
+            service.urllib.request, "urlopen", return_value=self.response("loading model")
+        ):
+            self.assertFalse(service.probe(self.url, "gpu")["ready"])
+        (self.root / "asr-gpu.json").write_text("null")
+        with patch.object(service.urllib.request, "urlopen", return_value=self.response()):
+            self.assertFalse(service.probe(self.url, "gpu")["ready"])
 
 
 class RouterTests(unittest.TestCase):

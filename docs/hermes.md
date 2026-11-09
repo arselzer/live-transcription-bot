@@ -38,6 +38,13 @@ readiness. Normal check exits nonzero when live transcription is unavailable;
 `check --recording-only` checks capture without requiring speech model files.
 Neither command removes systemd resource holds or starts another speech model.
 
+`speech_backends` reports endpoint readiness, managed model/device verification,
+and observed systemd holds. `transcription_degraded` means a fallback endpoint
+is available while the primary is unavailable. A ready external endpoint can
+still have unverified model/device provenance. Do not describe it as verified
+GPU recognition. The workspace reports recognition unavailability/fallback
+separately from recording; preserve capture while repairing speech services.
+
 ## Durable notifications and delivery
 
 The watchdog stores notifications atomically with its event cursor and incident

@@ -26,7 +26,13 @@ def emit(value, as_json=False):
                 "Recording: "
                 + ("ready" if value["recording_ready"] else "not ready")
                 + "; live transcription: "
-                + ("ready" if value["transcription_ready"] else "not ready")
+                + (
+                    "ready (fallback)"
+                    if value.get("transcription_degraded")
+                    else "ready"
+                    if value["transcription_ready"]
+                    else "not ready"
+                )
             )
         for item in value["checks"]:
             print(f"{item['status'].upper():5} {item['name']}: {item['detail']}")
@@ -160,35 +166,22 @@ def check_readiness(*, recording_only=False):
             add(name, "pass", "protocol replies")
         except Exception as exc:
             add(name, "warn", "live captions unavailable: " + type(exc).__name__)
-    try:
-        health_url = get("caption", "stt_url").rsplit("/", 1)[0] + "/health"
-        with urllib.request.urlopen(health_url, timeout=3) as response:
-            data = json.loads(response.read(8192))
-        add(
-            "speech backend",
-            "pass" if data.get("status") == "ok" else "warn",
-            "health endpoint replied; no inference request sent",
-        )
-    except Exception as exc:
-        add(
-            "speech backend",
-            "warn",
-            "readiness unverified: " + type(exc).__name__ + "; source recording is independent",
-        )
-    if get("asr", "cpu_fallback"):
-        for name, url in [
-            ("CPU large standby", get("asr", "cpu_url")),
-            ("CPU small standby", get("asr", "small_cpu_url")),
-        ]:
-            if name == "CPU small standby" and not get("asr", "adaptive_model"):
-                continue
-            try:
-                health_url = url.rsplit("/", 1)[0] + "/health"
-                with urllib.request.urlopen(health_url, timeout=3) as response:
-                    data = json.loads(response.read(8192))
-                add(name, "pass" if data.get("status") == "ok" else "warn", json.dumps(data))
-            except Exception as exc:
-                add(name, "warn", "fallback readiness unverified: " + type(exc).__name__)
+    from live_transcript.transcription.service import readiness
+
+    labels = {
+        "primary": "speech backend",
+        "cpu-large": "CPU large standby",
+        "cpu-small": "CPU small standby",
+    }
+    speech_backends = readiness()
+    for role, result in speech_backends.items():
+        add(labels[role], "pass" if result["ready"] else "warn", result["detail"])
+        if role == "primary" and not result["verified"]:
+            add(
+                "speech device verification",
+                "warn",
+                "Readiness does not establish the configured model/device",
+            )
     if not get("model", "enabled"):
         add("local model", "info", "disabled in this profile")
     else:
@@ -296,6 +289,9 @@ def check_readiness(*, recording_only=False):
         and (recording_only or transcription_ready),
         recording_ready=recording_ready,
         transcription_ready=transcription_ready,
+        transcription_degraded=transcription_ready
+        and not speech_backends.get("primary", {}).get("ready", False),
+        speech_backends=speech_backends,
         checks=checks,
         mode="recording_only" if recording_only else "transcription",
         runtime=runtime_info(),

@@ -223,7 +223,12 @@ The synthetic workspace walkthrough runs the packaged frontend and authenticated
 API against a disposable journal. It verifies search, text download, follow-live,
 VM viewer persistence across tabs, admission handoff without repeated forced tab
 changes, and narrow layouts. Its reviewed README animation uses only fixture text
-and participant labels; reproduce it with `python -m tools.demo_operator_ui`.
+and participant labels; run it with `python -m tools.demo_operator_ui --output OUTPUT`.
+The README animation replays captions and a page-only browser image from a Jitsi
+lab room using test voices. Reproduce that version with `--jitsi-image PAGE.png
+--transcript live-transcript.json`. Use the scripted lab participants and inspect
+every exported frame before replacing the documentation asset. The tool never
+connects to a VM or a live meeting; it replays the reviewed local inputs.
 
 The November 8 CPU backend drill built both images and exercised their non-root,
 read-only runtime with durable local state. With both speech workers stopped,

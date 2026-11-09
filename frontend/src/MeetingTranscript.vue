@@ -9,7 +9,10 @@ const props = defineProps({
 const query = ref(""),
   follow = ref(true),
   fontSize = ref(17),
-  scroller = ref(null);
+  scroller = ref(null),
+  search = ref(null),
+  pausedAt = ref(0),
+  notesExpanded = ref(true);
 const lines = computed(() => props.meeting?.lines || []);
 const filtered = computed(() => {
   const term = query.value.trim().toLocaleLowerCase();
@@ -27,6 +30,31 @@ function color(name) {
   for (const char of name) hash = ((hash << 5) - hash + char.charCodeAt(0)) | 0;
   return `speaker-${Math.abs(hash % 5)}`;
 }
+function highlighted(text) {
+  const term = query.value.trim();
+  if (!term) return [{ text, match: false }];
+  const result = [],
+    lower = text.toLocaleLowerCase(),
+    needle = term.toLocaleLowerCase();
+  let at = 0,
+    next;
+  while ((next = lower.indexOf(needle, at)) >= 0) {
+    result.push({ text: text.slice(at, next), match: false });
+    result.push({ text: text.slice(next, next + term.length), match: true });
+    at = next + term.length;
+  }
+  result.push({ text: text.slice(at), match: false });
+  return result;
+}
+function pause() {
+  if (follow.value) pausedAt.value = lines.value.length;
+  follow.value = false;
+}
+function clearSearch() {
+  query.value = "";
+  search.value?.focus();
+}
+const unread = computed(() => Math.max(0, lines.value.length - pausedAt.value));
 async function scrollLive() {
   await nextTick();
   if (scroller.value) scroller.value.scrollTop = scroller.value.scrollHeight;
@@ -38,8 +66,7 @@ function resume() {
 }
 function scrolled() {
   const el = scroller.value;
-  if (el && el.scrollHeight - el.scrollTop - el.clientHeight > 60)
-    follow.value = false;
+  if (el && el.scrollHeight - el.scrollTop - el.clientHeight > 60) pause();
 }
 watch(
   () => props.meeting?.session?.id,
@@ -75,17 +102,28 @@ function download() {
 <template>
   <section
     class="transcript-panel"
-    :class="{ 'has-notes': meeting?.board?.bullets?.length }"
+    :class="{ 'has-notes': meeting?.board?.bullets?.length && notesExpanded }"
   >
     <div class="transcript-tools">
       <label class="search-field"
         ><span class="sr-only">Search transcript</span
         ><input
           type="search"
+          ref="search"
           v-model="query"
           placeholder="Search transcript"
-          @input="follow = false"
-      /></label>
+          @input="pause"
+          @keydown.esc.prevent="clearSearch"
+        /><button
+          v-if="query"
+          class="clear-search"
+          type="button"
+          aria-label="Clear search"
+          @click="clearSearch"
+        >
+          ×
+        </button></label
+      >
       <label class="font-control"
         >Text
         <input
@@ -110,7 +148,9 @@ function download() {
         (stale
           ? "Updates delayed"
           : meeting?.status === "available"
-            ? "Connected to caption journal"
+            ? follow && !query
+              ? "Live updates"
+              : "Reading earlier captions"
             : "Waiting for captions")
       }}</span>
     </div>
@@ -133,7 +173,12 @@ function download() {
           }}</strong
           ><time>{{ stamp(line.t) }}</time>
         </div>
-        <p>{{ line.text }}</p>
+        <p>
+          <template v-for="(part, n) in highlighted(line.text)" :key="n"
+            ><mark v-if="part.match">{{ part.text }}</mark
+            ><template v-else>{{ part.text }}</template></template
+          >
+        </p>
       </article>
       <div v-if="!filtered.length" class="transcript-empty">
         <h2>
@@ -159,20 +204,35 @@ function download() {
         >Live recognition may revise recent words. Speaker labels can be
         uncertain.</span
       >
-      <button @click="resume" :class="{ following: follow && !query }">
-        {{ follow && !query ? "Following live" : "Follow live ↓" }}
+      <button
+        @click="resume"
+        :aria-label="follow && !query ? 'Following live' : 'Follow live ↓'"
+        :class="{ following: follow && !query }"
+      >
+        {{
+          follow && !query
+            ? "Following live"
+            : unread && !query
+              ? `${unread} new · Follow live ↓`
+              : "Follow live ↓"
+        }}
       </button>
     </div>
-    <section v-if="meeting?.board?.bullets?.length" class="meeting-notes">
-      <div class="panel-title">
+    <details
+      v-if="meeting?.board?.bullets?.length"
+      class="meeting-notes"
+      :open="notesExpanded"
+      @toggle="notesExpanded = $event.target.open"
+    >
+      <summary class="panel-title">
         <h2>Meeting notes</h2>
         <span>AI draft · verify against transcript</span>
-      </div>
+      </summary>
       <ul>
         <li v-for="bullet in meeting.board.bullets" :key="bullet">
           {{ bullet }}
         </li>
       </ul>
-    </section>
+    </details>
   </section>
 </template>

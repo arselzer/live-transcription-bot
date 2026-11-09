@@ -451,8 +451,10 @@ def start_tunnel(local_port, guest_port, token, log):
 
 def start_engine(profile, endpoint, log):
     from live_transcript.runtime.lab_guest import stop_process
+    from live_transcript.transcription.service import owned_engine
 
     environment = profile_environment(profile)
+    values = tomllib.loads(profile.read_text())
     started = time.monotonic()
     with log.open("ab") as stream:
         log_offset = stream.tell()
@@ -469,8 +471,9 @@ def start_engine(profile, endpoint, log):
             with urllib.request.urlopen(
                 endpoint.rsplit("/", 1)[0] + "/health", timeout=1
             ) as response:
-                if response.status == 200 and owns_listener(process.pid, urlsplit(endpoint).port):
-                    selected = tomllib.loads(profile.read_text())["asr"]["primary_device"]
+                record = owned_engine(values["paths"]["state"], "gpu", process.pid)
+                if response.status == 200 and owns_listener(record["pid"], urlsplit(endpoint).port):
+                    selected = values["asr"]["primary_device"]
                     with log.open("rb") as startup:
                         startup.seek(log_offset)
                         accelerator = b"whisper_backend_init_gpu: found GPU device" in startup.read(
@@ -486,7 +489,7 @@ def start_engine(profile, endpoint, log):
                         dict(model_ready_seconds=time.monotonic() - started),
                     )
                     return process
-        except OSError:
+        except (OSError, ValueError, KeyError, TypeError):
             time.sleep(0.25)
     stop_process(process)
     raise RuntimeError("Owned full-model inference server did not become ready")

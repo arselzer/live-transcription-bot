@@ -11,7 +11,7 @@ from unittest.mock import patch
 import wave
 
 import live_transcript.transcription.daemon as app
-from live_transcript.transcription.runtime import CaptionRuntime, language_choice
+from live_transcript.transcription.runtime import CaptionRuntime, language_choice, speech_spans
 from live_transcript.transcription.store import CaptionStore
 from live_transcript.notes.summary import sections, summarize
 from live_transcript.storage.layout import migrate
@@ -28,6 +28,28 @@ def wav_bytes(pcm):
 
 
 class WhisperRequestTests(unittest.TestCase):
+    def test_known_mismatched_managed_engine_never_receives_audio(self):
+        root = self.wav.parent
+        (root / "asr-gpu.json").write_text("{}")
+        original = app.get
+        with (
+            patch.object(
+                app,
+                "get",
+                side_effect=lambda s, k: (
+                    str(root) if (s, k) == ("paths", "state") else original(s, k)
+                ),
+            ),
+            patch(
+                "live_transcript.transcription.service.probe",
+                return_value=dict(ready=False, detail="model mismatch"),
+            ),
+            patch.object(app.urllib.request, "urlopen") as request,
+        ):
+            with self.assertRaisesRegex(RuntimeError, "model mismatch"):
+                app.stt_server(self.wav, "en")
+        request.assert_not_called()
+
     def setUp(self):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -112,6 +134,76 @@ class WhisperRequestTests(unittest.TestCase):
 
 
 class PipelineTests(unittest.TestCase):
+    def test_recognition_prompts_use_explicit_glossary_instead_of_display_names(self):
+        self.add(timeline=[(0, "Speaker Label")])
+        st = self.state()
+        st.update(generation=1, lines=[(0, "Speaker Label", "An unreliable draft.")], cand="draft")
+        result = app.ASRSegments([(0, "The spoken sentence is clear.")])
+        with (
+            patch(
+                "live_transcript.transcription.runtime.recognition_context",
+                return_value="project terminology",
+            ),
+            patch.object(app, "transcribe", return_value=result) as recognize,
+        ):
+            self.runtime.decode("meeting", st, bytes(st["pcm"]), 0, 1)
+        self.assertEqual(recognize.call_args.args[2], "project terminology")
+        self.assertNotIn("Speaker Label", recognize.call_args.args[2])
+        self.assertNotIn("unreliable", recognize.call_args.args[2])
+
+    def test_mixed_language_final_pass_splits_real_pauses_without_losing_samples(self):
+        self.add()
+        st = self.state()
+        english = b"\x01\x08" * 32000
+        silence = b"\0\0" * 24000
+        german = b"\x02\x08" * 32000
+        pcm = english + silence + german
+        st.update(generation=1, utterance_pcm=bytearray(pcm), utterance_t0=0, utterance_mark=0)
+        st["lines"] = [
+            (0, "Alice", "The book is on the table."),
+            (3.5, "Bob", "Das Buch ist auf dem Tisch."),
+        ]
+        calls = []
+
+        def recognize(audio, language, prompt):
+            calls.append(audio)
+            if audio.startswith(english[:640]):
+                return app.ASRSegments([(0, "The book is on the table.")], dict(en=0.95, de=0.02))
+            return app.ASRSegments([(0.75, "Das Buch ist auf dem Tisch.")], dict(de=0.95, en=0.02))
+
+        with patch.object(app, "transcribe", side_effect=recognize):
+            self.runtime.finalize_speech("meeting", st, pcm, 0, 0, 1)
+        self.assertEqual(b"".join(calls[:2]), pcm)
+        self.assertEqual(
+            [line[2] for line in st["lines"]],
+            ["The book is on the table.", "Das Buch ist auf dem Tisch."],
+        )
+        self.assertAlmostEqual(st["lines"][1][0], 3.5)
+
+    def test_final_language_loss_retains_draft_and_rejected_candidate_evidence(self):
+        self.add()
+        st = self.state()
+        st["generation"] = 1
+        st["lines"] = [
+            (0, "Alice", "The book is on the table."),
+            (1, "Alice", "Das Buch ist auf dem Tisch."),
+        ]
+        before = list(st["lines"])
+        with patch.object(
+            app, "transcribe", return_value=app.ASRSegments([(0, "Das Buch steht auf dem Tisch.")])
+        ):
+            self.runtime.finalize_speech("meeting", st, bytes(st["pcm"]), 0, 0, 1)
+        self.assertEqual(st["lines"], before)
+        self.assertEqual(st["reconciliation_events"][-1]["reason"], "language_coverage")
+        self.assertIn("steht", str(st["reconciliation_events"][-1]["candidate"]))
+
+    def test_silence_partition_is_bounded_and_preserves_all_pcm(self):
+        pcm = (b"\x01\x08" * 16000 + b"\0\0" * 24000) * 12
+        spans = speech_spans(pcm, app._rms, app.SILENCE_RMS, 1)
+        self.assertLessEqual(len(spans), 4)
+        self.assertEqual(b"".join(pcm[a:b] for a, b in spans), pcm)
+        self.assertEqual(speech_spans(b"\0\0" * 32000, app._rms, app.SILENCE_RMS, 1), [(0, 64000)])
+
     def test_low_confidence_leading_segment_cannot_erase_published_clause(self):
         self.add()
         st = self.state()

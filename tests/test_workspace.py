@@ -127,6 +127,10 @@ class WorkspaceTests(unittest.TestCase):
         ):
             body = dict(url="https://meet.google.com/abc-abcd-efg", minutes=90, request_id="a" * 32)
             self.assertEqual(
+                self.request("POST", "/api/meeting/start", dict(body, minutes=481), cookie)[0], 400
+            )
+            schedule.assert_not_called()
+            self.assertEqual(
                 self.request("POST", "/api/meeting/start", body, cookie, origin=False)[0], 403
             )
             self.assertEqual(

@@ -783,11 +783,25 @@ def guest_action(request):
                 raise ValueError("Speech quality metrics must be an object")
             age = max(0, now - gpu.stat().st_mtime)
             if age < 20:
+                backends = raw.get("backends") or {}
+                backend_age = now - raw.get("backends_checked_at", 0)
+                backend_state = "unknown"
+                if isinstance(backends, dict) and backends and 0 <= backend_age < 30:
+                    primary = backends.get("primary") or {}
+                    if isinstance(primary, dict) and primary.get("ready"):
+                        backend_state = "ready"
+                    elif any(
+                        row.get("ready") for row in backends.values() if isinstance(row, dict)
+                    ):
+                        backend_state = "degraded"
+                    else:
+                        backend_state = "unavailable"
                 speech = dict(
                     age=age,
                     queued_audio_s=raw.get("queued_audio_s"),
                     signal_flags=quality.get("flags", []),
-                    decode_error=bool(raw.get("decode_error")),
+                    decode_error=bool(raw.get("decode_error") or raw.get("stt_err")),
+                    backend_state=backend_state,
                 )
         except (OSError, ValueError, TypeError):
             pass

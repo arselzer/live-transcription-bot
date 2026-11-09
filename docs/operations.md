@@ -29,6 +29,28 @@ A restart is reserved for confirmed dead ownership or sustained failure of both
 independent raw audio writers. Recovery preserves the original deadline and has
 bounded attempt/cooldown limits.
 
+Managed ASR services retain a bounded startup log and process/model receipt under
+the configured state directory (`asr-ROLE-startup.log` and `asr-ROLE.json`).
+Readiness checks validate the live process, its listener, model file identity,
+and GPU initialization evidence. Model identity uses file metadata, not a content
+checksum. A known mismatched managed engine refuses inference. External engines
+remain supported; their health response alone leaves model/device provenance
+unverified. CPU primary profiles use the CPU timeout. Resource holds are reported
+without overriding them; release a hold through the workload's owner.
+
+The workspace distinguishes unavailable recognition from fallback recognition,
+independently of saving audio/video. Hermes receives the same recognition
+transitions through the existing event and notification interfaces. Backend
+readiness is polled without sending synthetic speech.
+
+When a live utterance contains evidence of both English and German, its final
+correction can split at observed pauses (`caption.mixed_language_gap`, default
+one second). This does not change the normal silence boundary. A correction
+that loses a previously recognized language retains the prior draft and records
+the rejected candidate under `reconciliation_events` in the journal/export.
+Those conservative draft words may still be wrong; review the independent
+full-model transcript and original audio for uncertain passages.
+
 ## UI/model rescue boundary
 
 The local model receives only a bounded list of already-approved, visible media

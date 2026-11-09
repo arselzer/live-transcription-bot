@@ -613,9 +613,12 @@ onUnmounted(() => {
               {{ admissionText || "Admission status not reported" }}
             </p>
           </div>
-          <span class="mode" :class="{ active: control }">{{
-            control ? "Keyboard and mouse enabled" : "View only"
-          }}</span>
+          <span
+            v-if="tab === 'console'"
+            class="mode"
+            :class="{ active: control }"
+            >{{ control ? "Keyboard and mouse enabled" : "View only" }}</span
+          >
         </div>
         <div v-if="error || statusError" role="alert" class="banner error">
           {{ error || statusError
@@ -644,7 +647,7 @@ onUnmounted(() => {
               type="number"
               v-model="duration"
               min="1"
-              max="1440"
+              max="480"
               required
               :disabled="!!activeRun || meetingBusy"
           /></label>
@@ -807,6 +810,106 @@ onUnmounted(() => {
         </div>
       </section>
       <aside v-show="tab !== 'library'">
+        <section class="panel">
+          <div class="panel-title">
+            <h2>Recording</h2>
+            <span class="pulse" :class="{ good: recording }" />
+          </div>
+          <div class="capture-title">
+            <h2>
+              {{ captureTitle }}
+            </h2>
+            <span class="duration">{{ elapsed }}</span>
+          </div>
+          <p
+            v-if="admissionText"
+            class="micro"
+            :class="{
+              warning:
+                admission?.stage === 'needs_operator' ||
+                admission?.stage === 'rejected',
+            }"
+            role="status"
+          >
+            {{ admissionText }}
+          </p>
+          <p v-if="admission && admission.stage !== 'admitted'" class="micro">
+            Meeting admission is still unconfirmed.
+          </p>
+          <div class="health-grid">
+            <div>
+              <span>Audio</span
+              ><strong :class="{ good: saving('audio') }">{{
+                saving("audio") ? "Saving" : "Unavailable"
+              }}</strong>
+            </div>
+            <div>
+              <span>Video</span
+              ><strong :class="{ good: saving('screen') }">{{
+                saving("screen") ? "Saving" : "Unavailable"
+              }}</strong>
+            </div>
+            <div>
+              <span>Snapshots</span
+              ><strong>{{
+                saving("snapshots") ? "Saving" : "Unavailable"
+              }}</strong>
+            </div>
+            <div>
+              <span>Free storage</span><strong>{{ disk }}</strong>
+            </div>
+          </div>
+          <div class="speech-strip" v-if="speechFresh">
+            <span
+              >STT queue
+              <strong
+                >{{
+                  Number(state.speech.queued_audio_s || 0).toFixed(1)
+                }}s</strong
+              ></span
+            ><span
+              :class="{
+                warning:
+                  state.speech.decode_error ||
+                  ['degraded', 'unavailable'].includes(
+                    state.speech.backend_state,
+                  ) ||
+                  state.speech.signal_flags?.includes('quiet_or_silence'),
+              }"
+              >{{
+                state.speech.backend_state === "unavailable"
+                  ? "Recognition unavailable"
+                  : state.speech.backend_state === "degraded"
+                    ? "Fallback recognition available"
+                    : state.speech.decode_error
+                      ? "Recognition delayed"
+                      : state.speech.signal_flags?.includes("digital_silence")
+                        ? "No audio detected"
+                        : state.speech.signal_flags?.includes(
+                              "quiet_or_silence",
+                            )
+                          ? "Low audio level"
+                          : "Audio detected"
+              }}</span
+            >
+          </div>
+          <p class="micro" v-if="capture?.speaker_source">
+            {{ capture.speaker_source }}
+          </p>
+          <p class="micro" v-if="capture && !fresh">
+            Recording status has not updated recently.
+          </p>
+          <div class="status-footer">
+            <span>{{
+              lastStatusAt
+                ? `Updated ${Math.floor(statusAge)}s ago`
+                : "Waiting for VM status"
+            }}</span>
+            <button class="text-button" @click="copyStatus" :disabled="!state">
+              Copy status
+            </button>
+          </div>
+        </section>
         <section v-show="tab !== 'library'" class="panel audio-panel">
           <div class="panel-title">
             <h2>Meeting audio</h2>
@@ -894,88 +997,6 @@ onUnmounted(() => {
               @click="action('key', { key: 'ctrl+l' })"
             >
               Address bar
-            </button>
-          </div>
-        </section>
-        <section class="panel">
-          <div class="panel-title">
-            <h2>Recording</h2>
-            <span class="pulse" :class="{ good: recording }" />
-          </div>
-          <div class="capture-title">
-            <h2>
-              {{ captureTitle }}
-            </h2>
-            <span class="duration">{{ elapsed }}</span>
-          </div>
-          <p
-            v-if="admissionText"
-            class="micro"
-            :class="{
-              warning:
-                admission?.stage === 'needs_operator' ||
-                admission?.stage === 'rejected',
-            }"
-            role="status"
-          >
-            {{ admissionText }}
-          </p>
-          <p v-if="admission && admission.stage !== 'admitted'" class="micro">
-            Meeting admission is still unconfirmed.
-          </p>
-          <div class="health-grid">
-            <div>
-              <span>Audio</span
-              ><strong :class="{ good: saving('audio') }">{{
-                saving("audio") ? "Saving" : "Unavailable"
-              }}</strong>
-            </div>
-            <div>
-              <span>Video</span
-              ><strong :class="{ good: saving('screen') }">{{
-                saving("screen") ? "Saving" : "Unavailable"
-              }}</strong>
-            </div>
-            <div>
-              <span>Snapshots</span
-              ><strong>{{
-                saving("snapshots") ? "Saving" : "Unavailable"
-              }}</strong>
-            </div>
-            <div>
-              <span>Free storage</span><strong>{{ disk }}</strong>
-            </div>
-          </div>
-          <div class="speech-strip" v-if="speechFresh">
-            <span
-              >STT queue
-              <strong
-                >{{
-                  Number(state.speech.queued_audio_s || 0).toFixed(1)
-                }}s</strong
-              ></span
-            ><span :class="{ warning: state.speech.decode_error }">{{
-              state.speech.decode_error
-                ? "Recognition delayed"
-                : state.speech.signal_flags?.includes("digital_silence")
-                  ? "No audio detected"
-                  : "Audio detected"
-            }}</span>
-          </div>
-          <p class="micro" v-if="capture?.speaker_source">
-            {{ capture.speaker_source }}
-          </p>
-          <p class="micro" v-if="capture && !fresh">
-            Recording status has not updated recently.
-          </p>
-          <div class="status-footer">
-            <span>{{
-              lastStatusAt
-                ? `Updated ${Math.floor(statusAge)}s ago`
-                : "Waiting for VM status"
-            }}</span>
-            <button class="text-button" @click="copyStatus" :disabled="!state">
-              Copy status
             </button>
           </div>
         </section>
