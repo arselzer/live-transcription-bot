@@ -28,6 +28,7 @@ class BackendExportTests(unittest.TestCase):
             key.write_text("fixture private key never enters the image")
             known.write_text("fixture host trust")
             values = copy.deepcopy(config.DEFAULTS)
+            values["providers"]["jitsi_hosts"] = "meet.example.org"
             values["vm"].update(
                 ssh="transcript@192.0.2.20", identity_file=str(key), known_hosts=str(known)
             )
@@ -75,6 +76,7 @@ class BackendExportTests(unittest.TestCase):
             generated = config.load(root / "bundle/application.toml")
             self.assertEqual(generated["runtime"]["supervisor"], "app")
             self.assertFalse(generated["vm"]["manage_libvirt"])
+            self.assertEqual(generated["providers"]["jitsi_hosts"], "meet.example.org")
 
     def test_native_and_container_decoder_cannot_claim_the_same_journal(self):
         from live_transcript.transcription.store import journal_owner

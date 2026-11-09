@@ -236,6 +236,7 @@ def export_application(args):
                 "audio",
                 "browser",
                 "google",
+                "providers",
                 "admission",
                 "recovery",
                 "identity",

@@ -136,6 +136,17 @@ class ConfigurationTests(unittest.TestCase):
             self.assertNotIn("url_file", path.read_text())
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
 
+    def test_guest_export_preserves_provider_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "guest.toml"
+            with patch.dict(
+                runtime_config.CONFIG, {"providers": {"jitsi_hosts": "meet.example.org"}}
+            ):
+                runtime_config.write_vm_config(path)
+            self.assertEqual(
+                runtime_config.load(path)["providers"]["jitsi_hosts"], "meet.example.org"
+            )
+
     def test_guest_export_omits_shared_host_login_configuration(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "guest.toml"

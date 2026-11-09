@@ -604,6 +604,7 @@ onUnmounted(() => {
                       google: "Google Meet",
                       zoom: "Zoom",
                       proton: "Proton Meet",
+                      jitsi: "Jitsi Meet",
                     }[state.session.provider]
                   : "Meeting"
               }}

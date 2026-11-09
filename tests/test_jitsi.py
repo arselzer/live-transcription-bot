@@ -1,14 +1,14 @@
 """Offline regression checks for the Jitsi provider adapter."""
 
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import live_transcript.providers.jitsi as jitsi
 
 
 def fake_get(section, key):
     if (section, key) == ("providers", "jitsi_hosts"):
-        return "192.0.2.10 meet.example.org"
+        return "192.0.2.10 meet.example.org example.org"
     return ""
 
 
@@ -37,6 +37,12 @@ class UrlTests(unittest.TestCase):
             "https://192.0.2.10:8443/a",  # room names need >= 2 characters
             "https://192.0.2.10:8443/Room/../etc",
             "https://meet.jit.si/Room room",
+            "https://user:secret@example.org/Room",
+            "https://meet.jit.si:bad/Room",
+            "https://meet.jit.si:70000/Room",
+            "https://meet.jit.si:0/Room",
+            "https://meet.jit.si/..",
+            "https://meet.jit.si/Room\n",
         ):
             with self.assertRaises(ValueError, msg=url):
                 jitsi.validate_url(url)
@@ -44,6 +50,16 @@ class UrlTests(unittest.TestCase):
     def test_query_parameters_stripped_public_url(self):
         url = "https://meet.jit.si/LT-Room?config.prejoinPageEnabled=false"
         self.assertEqual(jitsi.public_url(jitsi.validate_url(url)), "https://meet.jit.si/LT-Room")
+
+    def test_join_mutes_audio_and_video_and_preserves_private_access_query(self):
+        target = jitsi.navigation_url(
+            "https://meet.example.org/Room?jwt=fixture#config.startWithAudioMuted=false"
+        )
+        self.assertIn("?jwt=fixture#", target)
+        self.assertIn("config.startWithAudioMuted=true", target)
+        self.assertIn("config.startWithVideoMuted=true", target)
+        self.assertNotIn("=false", target)
+        self.assertNotIn("fixture", jitsi.public_url(target))
 
 
 class Locator:
@@ -66,7 +82,7 @@ class Locator:
     def click(self, **kwargs):
         self.page.clicks.append(self.key)
         if self.key == '[data-testid="prejoin.joinMeeting"]':
-            self.page.visibility["[data-testid='prejoin.joinMeeting']"] = False
+            self.page.visibility[self.key] = False
 
 
 class Page:
@@ -97,6 +113,20 @@ class Page:
 
 
 class PrejoinTests(unittest.TestCase):
+    def test_conference_state_handles_hidden_toolbars_and_leaving(self):
+        page = MagicMock()
+        page.evaluate.return_value = True
+        self.assertTrue(jitsi.joined(page))
+        page.locator.assert_not_called()
+        page.evaluate.return_value = False
+        self.assertFalse(jitsi.joined(page))
+        page.locator.assert_not_called()
+
+    def test_dom_fallback_cannot_confuse_prejoin_for_admission(self):
+        page = Page()
+        page.visibility[Page.LEAVE] = True
+        self.assertFalse(jitsi.joined(page))
+
     def test_prejoin_names_mutes_and_joins(self):
         with patch.object(jitsi, "get", fake_get):
             page = Page()
@@ -160,6 +190,41 @@ class PrejoinTests(unittest.TestCase):
 
 
 class DispatchTests(unittest.TestCase):
+    def test_observer_and_recovery_use_configured_https_origins_and_ports(self):
+        from live_transcript.core.options import provider_origin
+        from live_transcript.capture.observer import speaker_script
+
+        with patch.object(jitsi, "get", fake_get):
+            self.assertTrue(provider_origin("jitsi", "https://192.0.2.10:8443/Room"))
+            self.assertTrue(provider_origin("jitsi", "https://meet.jit.si/Room"))
+            for url in (
+                "http://meet.example.org/Room",
+                "https://foreign.example.org/Room",
+                "https://user:secret@example.org/Room",
+                "https://meet.example.org:bad/Room",
+            ):
+                self.assertFalse(provider_origin("jitsi", url), url)
+            self.assertFalse(provider_origin("proton", "https://meet.proton.me:8443/Room"))
+            self.assertEqual(speaker_script("jitsi"), jitsi.SPEAKERS_JS)
+
+    def test_jitsi_rescue_keeps_camera_disabled_and_session_identity(self):
+        from live_transcript.providers.rescue import validate_candidates, plan_recovery
+        from live_transcript.runtime.meeting_view import validate_session
+
+        self.assertEqual(
+            validate_session(dict(id="fixture", provider="jitsi"))["provider"], "jitsi"
+        )
+        snapshot = dict(
+            provider="jitsi",
+            controls=[dict(id=0, label="Resume audio", action="resume_audio", dialog=False)],
+        )
+        self.assertEqual(len(validate_candidates(snapshot)), 1)
+        with patch("live_transcript.providers.rescue.get", return_value=False):
+            self.assertEqual(plan_recovery(snapshot)["id"], 0)
+        snapshot["controls"][0].update(label="Turn on camera", action="enable_camera")
+        with self.assertRaises(ValueError):
+            validate_candidates(snapshot)
+
     def test_state_validation_accepts_configured_jitsi(self):
         from live_transcript.runtime import state
 
@@ -171,10 +236,10 @@ class DispatchTests(unittest.TestCase):
 
         from live_transcript.providers import zoom
 
-        with patch.object(jitsi, "get", fake_get), patch.object(
-            jitsi, "run", return_value=0
-        ) as run, patch.object(
-            sys, "argv", ["join", "https://meet.jit.si/LT-Room"]
+        with (
+            patch.object(jitsi, "get", fake_get),
+            patch.object(jitsi, "run", return_value=0) as run,
+            patch.object(sys, "argv", ["join", "https://meet.jit.si/LT-Room"]),
         ):
             self.assertEqual(zoom.main(), 0)
             run.assert_called_once()

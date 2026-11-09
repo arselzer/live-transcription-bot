@@ -9,6 +9,21 @@ launcher quoting, guest bundle execution, source privacy/index checks,
 recovery checkpoints, configuration validation and recovery
 policy boundaries. Unit tests do not prove a live provider join.
 
+Jitsi regressions cover invitation policy, custom-port origin checks, admission
+with hidden toolbars, guest/application config export, recovery policy, recording
+labels and TTS mute restoration. They do not establish end-to-end recognition
+accuracy, overlap handling, or resilience to network impairment.
+
+For a live Jitsi test, retain the sender's exact audio, source revision, instance
+image digests, effective server configuration and participant timelines. Use
+Chrome file capture for a scripted sender and verify speech in the final pulled
+WAV. RTP counters and a passing quality heuristic alone are insufficient. Give
+the sender a silent lead-in and stop after a complete phrase to avoid truncated
+first/last utterances. Compare against a timed reference before reporting WER.
+Use an isolated profile and owned process groups; serialize test rounds and stop
+only their observed run IDs. Broad browser kills, default-source changes, or an
+unscoped stop can interrupt another meeting or invalidate the test.
+
 Postprocessing regressions include alternating hallucination loops, retained
 rejected candidates, independent short-chunk retries, speech crossing chunk
 boundaries, end timestamps, source-sensitive cache reuse and full live-journal

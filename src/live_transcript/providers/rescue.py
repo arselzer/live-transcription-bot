@@ -15,7 +15,7 @@ from pathlib import Path
 
 from live_transcript.capture.guard import atomic_json, event
 from live_transcript.core.config import get
-from live_transcript.core.options import provider_origin
+from live_transcript.core.options import PROVIDERS, provider_origin
 
 SELECTOR = 'button,[role="button"],input[type="button"]'
 CONTROL_JS = """e => ({label:(e.getAttribute('aria-label')||e.getAttribute('title')||
@@ -57,7 +57,7 @@ def permitted_action(label, dialog=False):
 
 
 def validate_candidates(data):
-    if not isinstance(data, dict) or data.get("provider") not in ("zoom", "proton", "google"):
+    if not isinstance(data, dict) or data.get("provider") not in PROVIDERS:
         raise ValueError("invalid UI snapshot")
     controls = data.get("controls")
     if not isinstance(controls, list) or len(controls) > 24:
@@ -67,7 +67,12 @@ def validate_candidates(data):
         if not isinstance(control, dict) or control.get("id") != number:
             raise ValueError("invalid control identity")
         action = permitted_action(control.get("label"), control.get("dialog") is True)
-        if not action or action != control.get("action"):
+        if (
+            not action
+            or action != control.get("action")
+            or data["provider"] == "jitsi"
+            and action == "enable_camera"
+        ):
             raise ValueError("unapproved recovery control")
         valid.append(
             dict(
@@ -166,6 +171,8 @@ class UIRescue:
             try:
                 for item in frame.evaluate(SNAPSHOT_JS):
                     action = permitted_action(item.get("label"), item.get("dialog") is True)
+                    if self.provider == "jitsi" and action == "enable_camera":
+                        continue
                     if item.get("visible") and action:
                         candidates.append(
                             dict(

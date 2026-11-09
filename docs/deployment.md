@@ -238,6 +238,35 @@ storage retained. Persistent guest state is therefore not a supported admission
 fix. Keep the operator console available for recovery, and validate unattended
 admission separately before relying on Google Meet for a scheduled recording.
 
+## Jitsi Meet
+
+Jitsi is experimental. Use a controlled instance for repeatable integration
+tests, and configure its hostname in the private profile:
+
+```toml
+[providers]
+jitsi_hosts = "meet.example.org"
+```
+
+Start with `live-transcript start 'https://meet.example.org/Room' --max-min 30`,
+or paste the invitation into the workspace. The same allowlist is exported to
+the guest and Docker application. HTTPS with a custom port is supported; URL
+credentials and malformed room paths are rejected. Admission still depends on
+the instance's host/lobby policy; public meet.jit.si is not a guaranteed guest
+test target. Access queries remain private and are omitted from public URLs.
+
+The adapter starts with microphone and video muted and receives meeting media.
+It records audio, desktop video and snapshots independently of captions, with
+participant/speaker observations from browser state and a DOM fallback. These
+observations do not establish speaker identity or identify overlapping voices.
+The caption camera is currently disabled for Jitsi. Explicit TTS requests reveal
+the microphone controls and restore mute after playback.
+
+The current adapter tolerates self-signed TLS certificates. Use trusted instances;
+certificate verification needs a stricter deployment policy before broader use.
+Admission failures retain screenshots, but continuous pre-admission archival
+capture is not yet implemented for Jitsi.
+
 ## Storage
 
 `paths.root` is the data workspace, independent of the source installation.

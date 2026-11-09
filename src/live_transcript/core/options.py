@@ -4,21 +4,29 @@ from pathlib import Path
 import re
 from urllib.parse import parse_qs, urlencode, urlsplit
 
+PROVIDERS = ("zoom", "proton", "google", "jitsi")
+
 
 def provider_origin(provider, url):
     """Allow UI/evidence access only on the selected provider's HTTPS origin."""
     try:
         parsed = urlsplit(url)
+        port = parsed.port
         if (
             parsed.scheme != "https"
             or parsed.username
             or parsed.password
-            or parsed.port not in (None, 443)
+            or provider != "jitsi"
+            and port not in (None, 443)
         ):
             return False
         host = parsed.hostname or ""
     except ValueError:
         return False
+    if provider == "jitsi":
+        from live_transcript.providers.jitsi import is_jitsi_url
+
+        return port != 0 and is_jitsi_url(url)
     if provider == "zoom":
         return host == "zoom.us" or host.endswith(".zoom.us")
     return host == {"proton": "meet.proton.me", "google": "meet.google.com"}.get(

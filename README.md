@@ -2,7 +2,9 @@
 
 A self-hosted meeting recorder with live captions, meeting notes, a caption
 camera, and optional text-to-speech. Operate it with **`live-transcript`**.
-Zoom and Proton Meet adapters are included; Google Meet support is experimental.
+Zoom and Proton Meet adapters are included; Google Meet and Jitsi Meet support
+are experimental. See [Jitsi deployment](docs/deployment.md#jitsi-meet) for
+self-hosted instances and test limitations.
 
 ![Live transcript workspace demonstration](docs/assets/workspace-demo.gif)
 

@@ -46,6 +46,19 @@ class VoiceController:
         tmp.replace(ready)
 
     def mic_button(self, unmute):
+        if self.provider == "jitsi":
+            # Jitsi unmounts controls when the toolbar auto-hides. Reveal it
+            # only for an explicit voice request, then use its observed label.
+            viewport = self.page.viewport_size
+            if viewport:
+                self.page.mouse.move(viewport["width"] / 2, max(0, viewport["height"] - 1))
+            label = "Unmute microphone" if unmute else "Mute microphone"
+            control = self.page.get_by_role("button", name=label, exact=True).first
+            try:
+                control.wait_for(state="visible", timeout=1200)
+            except Exception:
+                pass
+            return control
         if self.provider == "google":
             from live_transcript.providers.google_meet import button
 

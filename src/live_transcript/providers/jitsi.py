@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """Jitsi Meet adapter for the existing Live Transcript VM and caption daemon.
 
-Works against self-hosted instances and meet.jit.si. Guests join by plain
-room URL with no account, and the instance owner controls admission policy,
-which makes this the deterministic provider for end-to-end tests.
+Works against self-hosted instances and meet.jit.si. The instance owner controls
+guest admission; public instances may require an authenticated host. A controlled
+self-hosted instance is useful for repeatable end-to-end tests.
 Selectors follow the 2026 jitsi-meet build: join button testid
 "prejoin.joinMeeting", in-call leave control aria-label "Leave the meeting".
 Archival capture is independent of live captions and keeps source evidence.
@@ -41,20 +41,22 @@ def is_jitsi_url(url):
         host = (urlsplit(url).hostname or "").lower()
     except ValueError:
         return False
-    return (
-        host == "meet.jit.si"
-        or host.endswith(".jit.si")
-        or host in _configured_hosts()
-    )
+    return host == "meet.jit.si" or host.endswith(".jit.si") or host in _configured_hosts()
 
 
 def validate_url(url):
+    if not isinstance(url, str) or len(url) > 4096 or any(ord(c) < 33 for c in url):
+        raise ValueError("Invalid Jitsi invitation")
     p = urlsplit(url)
     host = (p.hostname or "").lower()
     allowed = host == "meet.jit.si" or host.endswith(".jit.si") or host in _configured_hosts()
     if (
         p.scheme != "https"
         or not allowed
+        or p.username is not None
+        or p.password is not None
+        or p.port == 0
+        or p.path in ("/.", "/..")
         or not re.fullmatch(r"/[A-Za-z0-9_.-]{2,128}", p.path)
     ):
         raise ValueError(
@@ -62,6 +64,12 @@ def validate_url(url):
             "self-hosted instances)"
         )
     return urlunsplit((p.scheme, p.netloc, p.path, p.query, ""))
+
+
+def navigation_url(url):
+    # URL overrides take precedence over saved media settings. Receive video
+    # normally, but never transmit the synthetic test camera or a default mic.
+    return validate_url(url) + "#config.startWithAudioMuted=true&config.startWithVideoMuted=true"
 
 
 def public_url(url):
@@ -96,10 +104,30 @@ def click_if_visible(pg, label):
     return False
 
 
+JOINED_JS = """() => {
+ const state=window.APP?.store?.getState?.()?.['features/base/conference'];
+ if(!state || !('conference' in state))return null;
+ const conference=state.conference;
+ if(!conference || conference===state.leaving)return false;
+ return typeof conference.isJoined==='function' ? Boolean(conference.isJoined()) : null;
+}"""
+
+
 def joined(pg):
-    """Leave control also renders on the 2026 pre-join toolbar; require an
-    in-call-only control (the mic toggle sits in the call toolbar only)."""
+    """Prefer conference state, which survives the toolbar auto-hiding.
+
+    Source: jitsi-meet react/features/base/conference/functions.ts and
+    lib-jitsi-meet JitsiConference.isJoined(). DOM fallback supports older builds.
+    """
     try:
+        state = pg.evaluate(JOINED_JS)
+        if type(state) is bool:
+            return state
+    except Exception:
+        pass
+    try:
+        if visible(pg.locator('[data-testid="prejoin.joinMeeting"]')):
+            return False
         if not visible(leave_control(pg)):
             return False
         return any(
@@ -141,7 +169,7 @@ def meeting_ended(page):
 
 
 def prejoin(pg, name, timeout=330):
-    """Submit once; honour lobby waiting ("Ask to join") hosts indefinitely."""
+    """Submit once and wait for host admission within the supplied budget."""
     end = time.monotonic() + timeout
     submitted = False
     last_status = ""
@@ -163,9 +191,7 @@ def prejoin(pg, name, timeout=330):
                 re.I,
             )
             if any(fatal.search(t) for t in dialogs):
-                raise AdmissionRefused(
-                    "Jitsi refused the join; inspect jitsi-denied.png in the VM"
-                )
+                raise AdmissionRefused("Jitsi refused the join; inspect jitsi-denied.png in the VM")
             if not submitted:
                 field = pg.locator('input[placeholder*="name" i]').first
                 try:
@@ -206,15 +232,28 @@ def prejoin(pg, name, timeout=330):
                 pg.wait_for_timeout(500)
                 continue
             raise
-    raise TimeoutError("No confirmed admission within 330 seconds; no recording started")
+    raise TimeoutError(f"No confirmed admission within {timeout:g} seconds; no recording started")
 
 
-SPEAKERS_JS = """() => [...document.querySelectorAll('[id^="participant-"]')].map(e => ({
+SPEAKERS_JS = """() => {
+ // Jitsi virtualizes participant tiles; browser state also retains names for
+ // people whose tiles are off screen. Serialize only observed name/role fields.
+ try {
+   const state=window.APP?.store?.getState?.()?.['features/base/participants'];
+   if(state) {
+     const remote=state.remote instanceof Map ? [...state.remote.values()] : [];
+     const people=[state.local,...remote].filter(p=>p && typeof p.name==='string' && p.name.trim());
+     if(people.length)return people.slice(0,100).map(p=>({name:p.name.trim().slice(0,64),
+       role:p.id===state.dominantSpeaker || p.dominantSpeaker===true ? 'active':'tile'}));
+   }
+ } catch (_) {}
+ return [...document.querySelectorAll('[id^="participant-"]')].map(e => ({
   role: e.querySelector('.dominant-speaker') || (e.className||'').includes('dominant-speaker')
     ? 'active' : 'tile',
   name: ((e.querySelector('.displayname')?.textContent
     || e.querySelector('[class*="displayname"]')?.textContent) || '').trim().slice(0, 64)
-})).filter(x => x.name).slice(0, 100)"""
+})).filter(x => x.name).slice(0, 100);
+}"""
 
 
 class Children:
@@ -355,7 +394,7 @@ def run(argv=None):
                 # fabricate a sine-wave mic (fake video device is required by
                 # the prejoin), and a missed mute click would flood the room
                 # mix with that tone.
-                join_url = a.meeting.split("#", 1)[0] + "#config.startWithAudioMuted=true"
+                join_url = navigation_url(a.meeting)
                 pg.goto(join_url, wait_until="domcontentloaded", timeout=60000)
                 if a.dry:
                     pg.wait_for_timeout(5000)
@@ -363,9 +402,7 @@ def run(argv=None):
                     print("DRY: inspected pre-join; did not join or record", flush=True)
                     return
                 prejoin(pg, a.name)
-                print(
-                    "JOINED Jitsi Meet (Leave the meeting control confirmed)", flush=True
-                )
+                print("JOINED Jitsi Meet (conference admission confirmed)", flush=True)
                 if os.environ.get("LT_SESSION_MARKER"):
                     Path(os.environ["LT_SESSION_MARKER"]).write_text(
                         json.dumps(dict(utc=time.time(), provider="jitsi"))
@@ -442,7 +479,7 @@ def run(argv=None):
                     ],
                     str(out) + ".screen.log",
                 )
-                voice = VoiceController(pg, out.stem, a.name)
+                voice = VoiceController(pg, out.stem, a.name, provider="jitsi")
                 from live_transcript.providers.rescue import UIRescue
 
                 ui_rescue = UIRescue(archive.root, "jitsi")
@@ -532,12 +569,14 @@ def run(argv=None):
                         )
                         stats["t"] = round(now - t0, 2)
                         stats["camera"] = optional_feature(
-                            lambda: "on"
-                            if (
-                                visible(button(pg, "Stop camera"))
-                                or visible(button(pg, "Turn off camera"))
-                            )
-                            else "off",
+                            lambda: (
+                                "on"
+                                if (
+                                    visible(button(pg, "Stop camera"))
+                                    or visible(button(pg, "Turn off camera"))
+                                )
+                                else "off"
+                            ),
                             "camera controls",
                             "unknown",
                         )

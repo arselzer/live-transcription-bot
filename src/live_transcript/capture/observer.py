@@ -58,7 +58,14 @@ def collect(root):
         try:
             while time.time() < config["deadline"] and not (root / "stop.json").exists():
                 now = time.time()
-                row = dict(t=round(now - started, 3), utc=now, who=[], source="browser-dom")
+                row = dict(
+                    t=round(now - started, 3),
+                    utc=now,
+                    who=[],
+                    source="browser-state-or-dom"
+                    if config["provider"] == "jitsi"
+                    else "browser-dom",
+                )
                 try:
                     pages = [
                         pg

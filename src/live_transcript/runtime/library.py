@@ -19,6 +19,7 @@ import time
 import wave
 
 from live_transcript.core.config import get
+from live_transcript.core.options import PROVIDERS
 
 ARTIFACTS = {
     "audio": (".wav", "audio/wav"),
@@ -245,9 +246,7 @@ def inspect_recording(root, stem):
     return dict(
         title=stem,
         updated_at=modified or config.get("started", 0),
-        provider=config.get("provider")
-        if config.get("provider") in ("zoom", "proton", "google")
-        else "",
+        provider=config.get("provider") if config.get("provider") in PROVIDERS else "",
         duration=duration,
         status=str(status)[:80],
         artifacts=artifacts,

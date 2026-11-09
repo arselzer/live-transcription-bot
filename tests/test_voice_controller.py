@@ -64,6 +64,20 @@ class VoiceTests(unittest.TestCase):
         self.page.get_by_role.assert_any_call("button", name="Mute microphone", exact=True)
         self.assertFalse((self.voice.inbox / "request.json").exists())
 
+    @patch("live_transcript.speech.controller.play_wav", return_value={"duration": 0.1})
+    @patch("live_transcript.speech.controller.socket.create_connection")
+    def test_jitsi_speech_reveals_hidden_controls_and_restores_mute(self, connect, play):
+        self.voice.provider = "jitsi"
+        self.page.viewport_size = {"width": 1000, "height": 700}
+        self.audio(connect)
+        self.request()
+        self.voice.poll()
+        self.assertTrue(self.result()["ok"])
+        self.assertGreaterEqual(self.page.mouse.move.call_count, 2)
+        self.page.get_by_role.assert_any_call("button", name="Unmute microphone", exact=True)
+        self.page.get_by_role.assert_any_call("button", name="Mute microphone", exact=True)
+        self.assertEqual(play.call_count, 1)
+
     @patch(
         "live_transcript.speech.controller.play_wav",
         side_effect=RuntimeError("playback interrupted"),

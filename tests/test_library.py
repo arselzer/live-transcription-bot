@@ -116,3 +116,8 @@ class LibraryTests(unittest.TestCase):
         self.assertEqual(len(value["lines"]), 1)
         self.assertEqual(value["lines"][0]["speaker"], "Participant 1")
         self.assertEqual(value["transcript_source"], "final")
+
+    def test_jitsi_recording_keeps_its_provider_label(self):
+        (self.recordings / "fixture-session.archive/config.json").write_text('{"provider":"jitsi"}')
+        library.scan()
+        self.assertEqual(library.detail(self.ident)["provider"], "jitsi")

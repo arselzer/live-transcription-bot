@@ -11,6 +11,7 @@ import re
 import sqlite3
 import time
 import json
+from live_transcript.core.options import PROVIDERS
 
 
 def validate_session(value):
@@ -22,9 +23,7 @@ def validate_session(value):
         raise ValueError("Meeting identity is unavailable")
     return dict(
         id=value["id"],
-        provider=value.get("provider")
-        if value.get("provider") in ("zoom", "proton", "google")
-        else "",
+        provider=value.get("provider") if value.get("provider") in PROVIDERS else "",
     )
 
 
